@@ -40,5 +40,27 @@ python src/process_clip.py \
   --num-seconds $NUM_SECONDS \
   --frame-step $FRAME_STEP
 
+# Generate quadview visualizations from the tracking results
+echo "Generating quadview visualizations..."
+mkdir -p $OUTPUT_DIR/quadview
+python src/generate_quadview.py \
+  --tracking-data $OUTPUT_DIR/tracking_data.json \
+  --rink-image $RINK_IMAGE \
+  --rink-coordinates $RINK_COORDINATES \
+  --output-dir $OUTPUT_DIR/quadview
+
+# Create a special debug quadview for the first frame
+FIRST_FRAME="$OUTPUT_DIR/frames/frame_0.jpg"
+if [ -f "$FIRST_FRAME" ]; then
+  echo "Creating debug quadview for first frame..."
+  python src/create_quadview.py \
+    --input-frame $FIRST_FRAME \
+    --rink-image $RINK_IMAGE \
+    --rink-coordinates $RINK_COORDINATES \
+    --segmentation-model $SEGMENTATION_MODEL \
+    --output $OUTPUT_DIR/first_frame_quadview.jpg
+fi
+
 echo "Processing complete! Results are in $OUTPUT_DIR"
 echo "Open the HTML visualization at $OUTPUT_DIR/visualization.html"
+echo "Quadview visualizations are in $OUTPUT_DIR/quadview/"
