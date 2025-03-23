@@ -517,6 +517,43 @@ class HomographyCalculator:
             "faceoff_bottom_right": ["faceoff_right_bottom"],
         }
         
+        # IMPROVED MAPPINGS: Ensure correct mapping between detected lines and rink coordinates
+        # First handle direct matches
+        for name in list(source_points.keys()):
+            if name in dest_points:
+                common_point_names.append(name)
+        
+        # Handle goal line mappings more carefully
+        # When we detect a goal line on the left side, it should map to the left goal line in the rink
+        # Similarly for the right side
+        if "goal_line_left_top" in source_points and "goal_line_left_bottom" in source_points:
+            # Check if we have a proper match with destination points
+            if "goal_line_left_top" not in dest_points or "goal_line_left_bottom" not in dest_points:
+                # Map to any available goal line in destination
+                if "goal_line_left_top" in dest_points:
+                    point_mapping["goal_line_left_top"] = "goal_line_left_top"
+                    point_mapping["goal_line_left_bottom"] = "goal_line_left_bottom"
+                    common_point_names.extend(["goal_line_left_top", "goal_line_left_bottom"])
+                elif "goal_line_right_top" in dest_points:
+                    # If no left goal line in dest, try right side
+                    point_mapping["goal_line_left_top"] = "goal_line_right_top"
+                    point_mapping["goal_line_left_bottom"] = "goal_line_right_bottom"
+                    common_point_names.extend(["goal_line_right_top", "goal_line_right_bottom"])
+        
+        if "goal_line_right_top" in source_points and "goal_line_right_bottom" in source_points:
+            # Check if we have a proper match with destination points
+            if "goal_line_right_top" not in dest_points or "goal_line_right_bottom" not in dest_points:
+                # Map to any available goal line in destination
+                if "goal_line_right_top" in dest_points:
+                    point_mapping["goal_line_right_top"] = "goal_line_right_top"
+                    point_mapping["goal_line_right_bottom"] = "goal_line_right_bottom"
+                    common_point_names.extend(["goal_line_right_top", "goal_line_right_bottom"])
+                elif "goal_line_left_top" in dest_points:
+                    # If no right goal line in dest, try left side
+                    point_mapping["goal_line_right_top"] = "goal_line_left_top"
+                    point_mapping["goal_line_right_bottom"] = "goal_line_left_bottom"
+                    common_point_names.extend(["goal_line_left_top", "goal_line_left_bottom"])
+        
         # Add mappings from faceoff names to numeric indices
         for dest_name, src_names in faceoff_mapping.items():
             if dest_name in dest_points:
@@ -534,6 +571,9 @@ class HomographyCalculator:
                         point_mapping[src_name] = dest_name
                         common_point_names.append(dest_name)
                         print(f"Adding reverse mapping: {src_name} -> {dest_name}")
+        
+        # Ensure no duplicate entries in common_point_names
+        common_point_names = list(dict.fromkeys(common_point_names))
         
         debug_info["common_point_names"] = common_point_names
         debug_info["point_mapping"] = point_mapping
