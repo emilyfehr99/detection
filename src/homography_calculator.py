@@ -531,11 +531,9 @@ class HomographyCalculator:
                 top_right = right_goal_points[0]
                 bottom_right = right_goal_points[-1]
                 
-                # Draw continuous goal lines connecting both sides to form a complete rectangle
+                # Draw continuous goal lines connecting both sides
                 cv2.line(vis_frame, top_left, top_right, (255, 0, 255), 2)  # Top goal line
                 cv2.line(vis_frame, bottom_left, bottom_right, (255, 0, 255), 2)  # Bottom goal line
-                cv2.line(vis_frame, top_left, bottom_left, (255, 0, 255), 2)  # Left goal line
-                cv2.line(vis_frame, top_right, bottom_right, (255, 0, 255), 2)  # Right goal line
                 
                 # Add labels
                 cv2.putText(vis_frame, "Left Goal Line", (top_left[0] - 40, top_left[1] - 10), 
