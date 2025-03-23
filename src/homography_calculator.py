@@ -520,8 +520,28 @@ class HomographyCalculator:
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
             
             # Draw the diagonal goal lines if we have enough points
-            if left_goal_points:
+            if left_goal_points and right_goal_points:
                 # Find the furthest top and bottom points for true ends of line
+                left_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate
+                top_left = left_goal_points[0]
+                bottom_left = left_goal_points[-1]
+                
+                # Find the furthest top and bottom points for true ends of line
+                right_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate  
+                top_right = right_goal_points[0]
+                bottom_right = right_goal_points[-1]
+                
+                # Draw continuous goal lines connecting both sides
+                cv2.line(vis_frame, top_left, top_right, (255, 0, 255), 2)  # Top goal line
+                cv2.line(vis_frame, bottom_left, bottom_right, (255, 0, 255), 2)  # Bottom goal line
+                
+                # Add labels
+                cv2.putText(vis_frame, "Left Goal Line", (top_left[0] - 40, top_left[1] - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                cv2.putText(vis_frame, "Right Goal Line", (top_right[0] - 40, top_right[1] - 10), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+            elif left_goal_points:
+                # If we only have left points, still draw the left side
                 left_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate
                 top_left = left_goal_points[0]
                 bottom_left = left_goal_points[-1]
@@ -533,8 +553,8 @@ class HomographyCalculator:
                 cv2.putText(vis_frame, "Left Goal Line", (top_left[0] - 40, top_left[1] - 10), 
                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
             
-            if right_goal_points:
-                # Find the furthest top and bottom points for true ends of line
+            elif right_goal_points:
+                # If we only have right points, still draw the right side
                 right_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate  
                 top_right = right_goal_points[0]
                 bottom_right = right_goal_points[-1]
