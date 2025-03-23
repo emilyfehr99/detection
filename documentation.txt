@@ -1,0 +1,115 @@
+# Hockey Player Tracking System Documentation
+
+## Overview
+This system processes hockey broadcast footage to track player positions on a standardized 2D rink visualization. The system consists of three main components:
+
+1. **Rink Segmentation and Homography**: Identifies key rink features (blue lines, center line, etc.) in broadcast frames and computes a homography transformation to map broadcast coordinates to a standardized 2D rink model.
+
+2. **Player Detection and Orientation**: Detects players in broadcast footage, determines their positions, and identifies which direction they are facing.
+
+3. **Player Tracking and Visualization**: Maps detected players onto the 2D rink model and tracks their movements over time.
+
+## Project Structure
+
+### Main Directories
+- `/src`: Contains all source code files
+- `/data`: Contains input data files including:
+  - `rink_coordinates.json`: Defines coordinates of key rink features in the 2D model
+  - `nhl-rink.png`: Base image of the standardized NHL rink
+  - `/videos`: Contains broadcast video footage
+- `/models`: Contains trained models for various tasks:
+  - `detection.pt`: Model for detecting players and goalies
+  - `orient.pth`: Model for detecting player orientation
+  - `segmentation.pt`: Model for segmenting rink features
+- `/output`: Where visualization outputs and tracking data are saved
+- `/documentation`: Additional documentation files
+
+## Models
+
+### 1. `detection.pt`
+**Purpose**: Detects players and goalies in broadcast footage.
+**Input**: Video frame
+**Output**: Bounding boxes around detected players/goalies with confidence scores
+
+### 2. `orient.pth`
+**Purpose**: Determines the orientation of players (which direction they are facing).
+**Input**: Player crop from detection model
+**Output**: Orientation classification (left, right, or neutral)
+
+### 3. `segmentation.pt`
+**Purpose**: Segments key rink features (blue lines, center line, goal lines, circles).
+**Input**: Video frame
+**Output**: Segmentation masks for rink features
+
+## Processing Pipeline
+
+### 1. Frame Extraction
+- Extract frames from broadcast footage at a specified interval
+- Process a subset of the video for initial testing
+
+### 2. Rink Segmentation
+- Run segmentation model on each frame
+- Convert segmentation masks to polygons
+- Extract key points (line endpoints, circle centers)
+
+### 3. Homography Calculation
+- Map detected line endpoints to corresponding positions in the 2D rink model
+- Compute homography matrix for each frame
+- Handle frames with insufficient features through interpolation
+
+### 4. Player Detection
+- Run detection model on each frame
+- Filter detections to focus on players and goalies
+- For each detected player, calculate a reference point (1/3 height from bottom, center width)
+
+### 5. Player Orientation
+- For each detected player, determine orientation using the orient.pth model
+- Classify as facing left, right, or neutral
+
+### 6. Coordinate Mapping
+- Apply homography transformation to map player positions from broadcast view to 2D rink model
+- Use the calculated reference point as the player's position
+
+### 7. Visualization and Output
+- Create visualization showing players on the 2D rink model
+- Track player movements across frames
+- Generate output data in structured format
+
+## Implementation Plan
+
+### Phase 1: Basic Infrastructure
+- Set up project structure
+- Implement frame extraction and basic processing pipeline
+- Create utilities for model inference
+
+### Phase 2: Feature Implementation
+- Implement segmentation processing and polygon extraction
+- Develop homography calculation module
+- Create player detection and orientation modules
+
+### Phase 3: Integration
+- Combine all components into a unified pipeline
+- Process a small subset of video frames
+- Visualize initial results
+
+### Phase 4: Refinement
+- Improve tracking accuracy
+- Optimize processing pipeline
+- Handle edge cases
+
+### Phase 5: Full System
+- Process full videos
+- Generate comprehensive tracking data
+- Create final visualizations
+
+## Next Steps
+1. Implement frame extraction utility
+2. Create segmentation processing module
+3. Develop homography calculation based on segmentation results
+4. Implement player detection and orientation module
+5. Integrate components and test on sample video
+
+## Technical Notes
+- Homography calculation requires at least 4 corresponding points between broadcast view and 2D rink
+- Player positions are represented by a point at 1/3 height from bottom of bounding box and center width
+- Orientation is classified as left, right, or neutral based on model output

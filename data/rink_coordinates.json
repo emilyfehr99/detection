@@ -1,0 +1,74 @@
+{
+    "destination_points": {
+        "left_top": {"x": 590, "y": 120},
+        "right_top": {"x": 845, "y": 120},
+        "left_bottom": {"x": 590, "y": 475},
+        "right_bottom": {"x": 845, "y": 475}
+    },
+    "additional_points": {
+        "blue_lines": {
+            "left_top": {"x": 592, "y": 122},
+            "right_top": {"x": 845, "y": 122},
+            "left_bottom": {"x": 592, "y": 477},
+            "right_bottom": {"x": 845, "y": 477}
+        },
+        "center_line": {
+            "top": {"x": 715, "y": 120},
+            "bottom": {"x": 715, "y": 475}
+        },
+        "goal_lines": {
+            "left_top": {"x": 285, "y": 140},
+            "left_bottom": {"x": 285, "y": 445},
+            "right_top": {"x": 1150, "y": 140},
+            "right_bottom": {"x": 1150, "y": 445}
+        },
+        "center_circle": {
+            "center": {"x": 715, "y": 297.5},
+            "radius": 60
+        },
+        "faceoff_circles": {
+            "left_top": {
+                "center": {"x": 380, "y": 205},
+                "radius": 60
+            },
+            "left_bottom": {
+                "center": {"x": 380, "y": 390},
+                "radius": 60
+            },
+            "right_top": {
+                "center": {"x": 1055, "y": 205},
+                "radius": 60
+            },
+            "right_bottom": {
+                "center": {"x": 1055, "y": 390},
+                "radius": 60
+            }
+        },
+        "goal_creases": {
+            "left": {
+                "top": {"x": 285, "y": 280},
+                "bottom": {"x": 285, "y": 315}
+            },
+            "right": {
+                "top": {"x": 1150, "y": 280},
+                "bottom": {"x": 1150, "y": 315}
+            }
+        }
+    },
+    "rink_dimensions": {
+        "width": 1400,
+        "height": 600,
+        "blue_lines": {
+            "left_x": 590,
+            "right_x": 840
+        },
+        "center_line": {
+            "x": 715,
+            "y": 120
+        },
+        "goal_lines": {
+            "left_x": 350,
+            "right_x": 1050
+        }
+    }
+}
