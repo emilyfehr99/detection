@@ -509,9 +509,9 @@ class HomographyCalculator:
                     else:
                         right_goal_points.extend(pts)
                     
-                    # Still draw the original detected points/lines for reference (can be removed later)
-                    for i in range(len(pts) - 1):
-                        cv2.line(vis_frame, pts[i], pts[i + 1], (255, 0, 255), 1)  # Magenta (thinner line)
+                    # Do not draw the individual segments anymore
+                    # for i in range(len(pts) - 1):
+                    #     cv2.line(vis_frame, pts[i], pts[i + 1], (255, 0, 255), 1)  # Magenta (thinner line)
                 
                 elif "center" in goal_line:
                     center = (int(goal_line["center"]["x"]), int(goal_line["center"]["y"]))
@@ -521,8 +521,8 @@ class HomographyCalculator:
             
             # Draw the diagonal goal lines if we have enough points
             if left_goal_points:
-                # Sort by y-coordinate to find top and bottom points
-                left_goal_points.sort(key=lambda p: p[1])
+                # Find the furthest top and bottom points for true ends of line
+                left_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate
                 top_left = left_goal_points[0]
                 bottom_left = left_goal_points[-1]
                 
@@ -534,8 +534,8 @@ class HomographyCalculator:
                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
             
             if right_goal_points:
-                # Sort by y-coordinate to find top and bottom points
-                right_goal_points.sort(key=lambda p: p[1])
+                # Find the furthest top and bottom points for true ends of line
+                right_goal_points.sort(key=lambda p: p[1])  # Sort by y-coordinate  
                 top_right = right_goal_points[0]
                 bottom_right = right_goal_points[-1]
                 
@@ -670,8 +670,8 @@ class HomographyCalculator:
                 projected_corners = cv2.perspectiveTransform(rink_corners, np.linalg.inv(homography))
                 projected_corners = projected_corners.astype(int)
                 
-                # Draw rink boundaries
-                cv2.polylines(vis_frame, [projected_corners], True, (255, 0, 0), 2)
+                # Comment out rink boundaries to remove the blue shape
+                # cv2.polylines(vis_frame, [projected_corners], True, (255, 0, 0), 2)
                 
             except Exception as e:
                 self.logger.error(f"Error projecting rink corners: {e}")
