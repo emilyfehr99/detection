@@ -11,6 +11,22 @@ from orientation_detector import OrientationDetector
 from homography_calculator import HomographyCalculator
 
 
+class NumpyEncoder(json.JSONEncoder):
+    """
+    JSON encoder that can handle numpy arrays and other non-serializable types.
+    """
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super(NumpyEncoder, self).default(obj)
+
+
 class PlayerTracker:
     """
     Main module that integrates all components to track players in hockey broadcast footage.
@@ -52,13 +68,14 @@ class PlayerTracker:
         # Initialize tracking data
         self.tracking_data = {}
         
-    def process_frame(self, frame: np.ndarray, frame_id: int) -> Dict[str, Any]:
+    def process_frame(self, frame: np.ndarray, frame_id: int, debug_mode: bool = False) -> Dict:
         """
         Process a single frame to track players.
         
         Args:
             frame: Input frame (BGR format)
             frame_id: Frame identifier
+            debug_mode: Enable extra debugging output
             
         Returns:
             Dictionary containing processed data for the frame
@@ -72,21 +89,31 @@ class PlayerTracker:
         }
         
         # Step 1: Process through segmentation model to get rink features
-        segmentation_features = self.segmentation_processor.process_frame(frame)
+        segmentation_features = self.segmentation_processor.process_frame(frame, frame_id, self.output_dir)
         
         # Save the segmentation features for visualization
         frame_data["segmentation_features"] = segmentation_features
         
         # Step 2: Calculate homography based on segmentation features
-        # Pass the frame_id to the homography calculator for temporal smoothing
-        homography_matrix, homography_success = self.homography_calculator.calculate_homography(
-            segmentation_features, frame_id
+        # Extract the 'features' key from the segmentation results
+        success, homography_matrix, debug_info = self.homography_calculator.calculate_homography(
+            segmentation_features["features"]
         )
-        frame_data["homography_success"] = homography_success
-        frame_data["homography_matrix"] = homography_matrix  # Store the matrix for visualization
         
-        # No need to handle homography failure here - our calculator does that internally
-        # with the temporal smoothing approach
+        # Store homography results in frame data
+        frame_data["homography_success"] = success
+        frame_data["homography_debug_info"] = debug_info
+        
+        if success and homography_matrix is not None:
+            frame_data["homography_matrix"] = homography_matrix
+            
+            # Store additional debug info about homography
+            print(f"Homography calculation successful for frame {frame_id}")
+        else:
+            print(f"Homography calculation failed for frame {frame_id}: {debug_info.get('reason_for_failure', 'unknown')}")
+            
+            # We still continue processing even if homography fails
+            # The visualization will show segmentation features but player tracking will be limited
         
         # Step 3: Detect players
         player_detections = self.player_detector.process_frame(frame)
@@ -113,13 +140,16 @@ class PlayerTracker:
                 player_data["orientation_confidence"] = player_orientations[i]["confidence"]
             
             # Map position to rink if homography is available
-            if homography_matrix is not None:
-                # Use apply_homography instead of map_point
-                rink_positions = self.homography_calculator.apply_homography(
-                    [detection["reference_point"]], homography_matrix
-                )
-                if rink_positions:  # Check if we got any positions back
-                    player_data["rink_position"] = rink_positions[0]
+            if success and homography_matrix is not None:
+                try:
+                    rink_positions = self.homography_calculator.apply_homography(
+                        [detection["reference_point"]], homography_matrix
+                    )
+                    
+                    if rink_positions:  # Check if we got any positions back
+                        player_data["rink_position"] = rink_positions[0]
+                except Exception as e:
+                    print(f"Error applying homography to player: {e}")
             
             frame_data["players"].append(player_data)
         
@@ -128,147 +158,225 @@ class PlayerTracker:
         
         return frame_data
     
-    def visualize_frame(self, frame: np.ndarray, frame_data: Dict[str, Any], rink_image: np.ndarray = None) -> Dict[str, np.ndarray]:
+    def visualize_frame(self, frame: np.ndarray, frame_data: Dict, rink_image: np.ndarray = None, debug_mode: bool = False) -> Dict[str, np.ndarray]:
         """
-        Create visualizations for a processed frame.
+        Create visualizations for the processed frame.
         
         Args:
-            frame: Original input frame
-            frame_data: Processed data for the frame
-            rink_image: Optional rink image for visualization
+            frame: The original video frame
+            frame_data: The processed frame data
+            rink_image: The rink template image (optional)
+            debug_mode: Whether to generate additional debug visualizations
             
         Returns:
             Dictionary containing different visualizations
         """
         visualizations = {}
         
-        # Create broadcast visualization with players
+        # Create a copy of the frame for visualization
         broadcast_vis = frame.copy()
         
-        # Draw player detections and orientations
-        for player in frame_data["players"]:
-            x1, y1, x2, y2 = player["bbox"]
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        # Extract data
+        homography_success = frame_data.get("homography_success", False)
+        segmentation_features = frame_data.get("segmentation_features", {}).get("features", {})
+        players = frame_data.get("players", [])
+        frame_idx = frame_data.get("frame_id", 0)
+        
+        # --- BROADCAST VIEW VISUALIZATION ---
+        
+        # Draw segmentation features using the homography calculator's draw_visualization 
+        # This will ensure features are drawn even if homography calculation failed
+        if hasattr(self.homography_calculator, 'draw_visualization'):
+            # Use the new method if available (backward compatibility)
+            homography_matrix = None
+            if homography_success and "homography_matrix" in frame_data:
+                homography_matrix = frame_data["homography_matrix"]
             
-            # Determine color based on player type
-            color = (0, 255, 0) if player["type"] == "player" else (0, 0, 255)  # Green for players, Red for goalies
+            broadcast_vis = self.homography_calculator.draw_visualization(
+                broadcast_vis, 
+                segmentation_features,
+                homography_matrix
+            )
+        else:
+            # Fallback to the old method (draw segmentation lines)
+            broadcast_vis = self.homography_calculator.draw_segmentation_lines(
+                broadcast_vis, 
+                segmentation_features
+            )
             
-            # Draw bounding box
-            cv2.rectangle(broadcast_vis, (x1, y1), (x2, y2), color, 2)
-            
-            # Draw reference point
-            ref_x, ref_y = player["broadcast_position"]
-            cv2.circle(broadcast_vis, (int(ref_x), int(ref_y)), 5, (255, 0, 0), -1)
-            
-            # Draw orientation arrow if available
-            if "orientation" in player:
-                orientation = player["orientation"]
-                arrow_length = int(min(x2-x1, y2-y1) * 0.3)
-                arrow_start = (int(ref_x), int(ref_y))
+            # Add text about homography status
+            status_text = "Homography: Success" if homography_success else "Homography: Failed"
+            cv2.putText(broadcast_vis, status_text, (10, 30), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        # Draw player detections on broadcast view
+        for player in players:
+            if "position" in player:
+                pos = player["position"]
+                x, y = int(pos["x"]), int(pos["y"])
                 
-                if orientation == "left":
-                    arrow_end = (arrow_start[0] - arrow_length, arrow_start[1])
-                elif orientation == "right":
-                    arrow_end = (arrow_start[0] + arrow_length, arrow_start[1])
-                else:  # neutral
-                    arrow_end = (arrow_start[0], arrow_start[1] - arrow_length)
+                # Draw player marker (circle)
+                color = (0, 255, 0) if homography_success else (0, 165, 255)  # Green if homography succeeded, orange otherwise
+                cv2.circle(broadcast_vis, (x, y), 10, color, -1)
                 
-                cv2.arrowedLine(broadcast_vis, arrow_start, arrow_end, (255, 255, 0), 2, tipLength=0.3)
+                # Add player ID if available
+                if "id" in player:
+                    cv2.putText(broadcast_vis, str(player["id"]), 
+                              (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Add frame number
+        cv2.putText(broadcast_vis, f"Frame: {frame_idx}", (10, 70), 
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         visualizations["broadcast"] = broadcast_vis
         
-        # Create segmentation visualization
-        if "segmentation_features" in frame_data:
-            segmentation_vis = self.homography_calculator.draw_segmentation_lines(frame.copy(), frame_data["segmentation_features"])
-            visualizations["segmentation"] = segmentation_vis
-        
-        # Create rink visualization if a rink image is provided
-        if rink_image is not None and frame_data["homography_success"]:
+        # --- RINK VIEW VISUALIZATION ---
+        if rink_image is not None:
             rink_vis = rink_image.copy()
-            rink_dims = (rink_image.shape[1], rink_image.shape[0])
             
-            # Draw players on rink
-            for player in frame_data["players"]:
-                if "rink_position" in player:
-                    x, y = player["rink_position"]
-                    
-                    # Determine color based on player type
-                    color = (0, 255, 0) if player["type"] == "player" else (0, 0, 255)  # Green for players, Red for goalies
-                    
-                    # Draw player position
-                    cv2.circle(rink_vis, (int(x), int(y)), 10, color, -1)
-                    
-                    # Draw orientation arrow if available
-                    if "orientation" in player:
-                        orientation = player["orientation"]
-                        arrow_length = 20
-                        arrow_start = (int(x), int(y))
+            # Draw players on rink view (only if homography succeeded)
+            if homography_success:
+                for player in players:
+                    if "rink_position" in player:
+                        rink_pos = player["rink_position"]
+                        rx, ry = int(rink_pos["x"]), int(rink_pos["y"])
                         
-                        if orientation == "left":
-                            arrow_end = (arrow_start[0] - arrow_length, arrow_start[1])
-                        elif orientation == "right":
-                            arrow_end = (arrow_start[0] + arrow_length, arrow_start[1])
-                        else:  # neutral
-                            arrow_end = (arrow_start[0], arrow_start[1] - arrow_length)
-                        
-                        cv2.arrowedLine(rink_vis, arrow_start, arrow_end, (255, 255, 0), 2, tipLength=0.3)
+                        # Only draw players within rink boundaries
+                        if 0 <= rx < rink_vis.shape[1] and 0 <= ry < rink_vis.shape[0]:
+                            # Draw player marker
+                            cv2.circle(rink_vis, (rx, ry), 15, (0, 0, 255), -1)
+                            
+                            # Add player ID if available
+                            if "id" in player:
+                                cv2.putText(rink_vis, str(player["id"]), 
+                                          (rx + 15, ry - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            else:
+                # Add text about homography failure
+                cv2.putText(rink_vis, "Homography failed - No player tracking", (50, 50), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             
-            # Create warped broadcast frame if homography matrix is available
-            if "homography_matrix" in frame_data and frame_data["homography_matrix"] is not None:
-                warped_frame = self.homography_calculator.warp_frame(
-                    frame, frame_data["homography_matrix"], rink_dims
-                )
-                
-                if warped_frame is not None:
-                    visualizations["warped_broadcast"] = warped_frame
-                    
-                    # Create overlay of warped frame on rink
-                    # Use alpha blending to overlay the warped frame onto the rink
-                    alpha = 0.6  # Transparency factor
-                    overlay = rink_vis.copy()
-                    
-                    # Create a mask for non-zero (non-black) pixels in the warped frame
-                    non_zero_mask = (warped_frame.sum(axis=2) > 0).astype(np.uint8) * 255
-                    
-                    # Apply the mask to blend only the non-black parts of the warped frame
-                    for c in range(3):  # For each color channel
-                        overlay[:, :, c] = np.where(
-                            non_zero_mask > 0,
-                            overlay[:, :, c] * (1 - alpha) + warped_frame[:, :, c] * alpha,
-                            overlay[:, :, c]
-                        )
-                    
-                    visualizations["overlay"] = overlay
+            # Add frame number
+            cv2.putText(rink_vis, f"Frame: {frame_idx}", (10, 30), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             visualizations["rink"] = rink_vis
-            
-            # Add frame ID to visualization
-            cv2.putText(rink_vis, f"Frame: {frame_data['frame_id']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+        
+        # --- DEBUG VISUALIZATIONS ---
+        if debug_mode:
+            # If there are raw segmentation masks, visualize them
+            if "raw_masks" in frame_data.get("segmentation_features", {}):
+                raw_masks = frame_data["segmentation_features"]["raw_masks"]
+                
+                # Create a visualization of raw masks with different colors
+                mask_vis = frame.copy()
+                alpha = 0.5  # Transparency for overlay
+                
+                # Color mapping for different classes (same as in segmentation_processor.py)
+                color_map = {
+                    "Rink": (0, 200, 0),       # Green
+                    "BlueLine": (255, 0, 0),    # Blue
+                    "RedCenterLine": (0, 0, 255),  # Red
+                    "GoalLine": (255, 0, 255),  # Magenta
+                    "RedCircle": (0, 255, 255),  # Yellow
+                    "FaceoffCircle": (255, 255, 0)  # Cyan
+                }
+                
+                # Create an overlay image with all masks
+                overlay = np.zeros_like(mask_vis)
+                
+                # Draw each mask class with its color
+                for class_name, mask in raw_masks.items():
+                    if class_name in color_map:
+                        color = color_map[class_name]
+                        
+                        # Use much lower opacity for the Rink class
+                        class_alpha = 0.2 if class_name == "Rink" else alpha
+                        
+                        # Apply the mask with the appropriate color
+                        mask_area = np.where(mask)
+                        overlay[mask_area] = color
+                        
+                # Blend with original image
+                cv2.addWeighted(overlay, alpha, mask_vis, 1 - alpha, 0, mask_vis)
+                
+                # Add a title to the visualization
+                cv2.putText(mask_vis, "Segmentation Raw Masks", (10, 30), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+                
+                visualizations["raw_masks"] = mask_vis
         
         return visualizations
     
-    def save_tracking_data(self, output_path: str = None) -> str:
+    def save_tracking_data(self, output_path: str) -> str:
         """
-        Save tracking data to JSON file.
+        Save tracking data to a JSON file.
         
         Args:
-            output_path: Path to save the JSON file
+            output_path: Path to save tracking data
             
         Returns:
-            Path to the saved JSON file
+            Path to the saved file
         """
-        if output_path is None:
-            if self.output_dir is None:
-                raise ValueError("No output directory specified")
-            output_path = os.path.join(self.output_dir, "tracking_data.json")
-        
-        # Convert tracking data to serializable format
+        # Create a serializable copy of the tracking data
         serializable_data = {}
+        
+        print(f"Preparing tracking data for saving ({len(self.tracking_data)} frames)...")
+        
+        # Helper function to filter out non-serializable objects
+        def filter_non_serializable(obj):
+            if isinstance(obj, dict):
+                return {k: filter_non_serializable(v) for k, v in obj.items() 
+                        if k not in ['segmentation_mask', 'raw_masks', 'overlay_visualization']}
+            elif isinstance(obj, list):
+                return [filter_non_serializable(item) for item in obj]
+            elif isinstance(obj, (str, int, float, bool, type(None))):
+                return obj
+            elif isinstance(obj, np.ndarray):
+                # Only keep small arrays
+                if obj.size <= 100:
+                    return obj.tolist()
+                return "large_array_removed"
+            else:
+                return str(obj)
+        
+        # Process each frame separately
         for frame_id, frame_data in self.tracking_data.items():
-            serializable_frame = frame_data.copy()
-            serializable_data[str(frame_id)] = serializable_frame
+            try:
+                serializable_frame = filter_non_serializable(frame_data)
+                serializable_data[str(frame_id)] = serializable_frame
+            except Exception as e:
+                print(f"Error processing frame {frame_id}: {str(e)}")
+                continue
         
-        with open(output_path, 'w') as f:
-            json.dump(serializable_data, f, indent=4)
-        
-        return output_path
+        try:
+            print(f"Saving {len(serializable_data)} frames to {output_path}...")
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Save with error handling
+            with open(output_path, 'w') as f:
+                json.dump(serializable_data, f, indent=2, cls=NumpyEncoder)
+            
+            # Verify the file was created successfully
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                print(f"Successfully saved tracking data to {output_path} ({file_size/1024:.1f} KB)")
+            else:
+                print(f"Failed to save tracking data to {output_path} - file not created")
+                
+            return output_path
+            
+        except Exception as e:
+            print(f"Error saving tracking data: {str(e)}")
+            
+            # Try saving in a simpler format as backup
+            backup_path = output_path.replace('.json', '_backup.json')
+            try:
+                print(f"Attempting to save basic tracking data to {backup_path}...")
+                with open(backup_path, 'w') as f:
+                    json.dump({"frames": list(serializable_data.keys())}, f)
+                return backup_path
+            except Exception as e2:
+                print(f"Failed to save backup tracking data: {str(e2)}")
+                return None

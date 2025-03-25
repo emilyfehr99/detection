@@ -66,16 +66,9 @@ def draw_rink_coordinates(rink_img, coordinates):
     cv2.line(img, left_top, left_bottom, (255, 0, 255), 2)
     cv2.line(img, right_top, right_bottom, (255, 0, 255), 2)
     
-    # Draw diagonal goal line as requested
-    cv2.line(img, left_bottom, right_top, (255, 0, 255), 2)
-    
-    cv2.putText(img, "goal_left_top", (left_top[0] - 100, left_top[1] - 5), 
+    cv2.putText(img, "LEFT GOAL LINE", (left_top[0] - 120, left_top[1] - 10), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-    cv2.putText(img, "goal_left_bottom", (left_bottom[0] - 100, left_bottom[1] + 15), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-    cv2.putText(img, "goal_right_top", (right_top[0] + 5, right_top[1] - 5), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-    cv2.putText(img, "goal_right_bottom", (right_bottom[0] + 5, right_bottom[1] + 15), 
+    cv2.putText(img, "RIGHT GOAL LINE", (right_top[0] - 40, right_top[1] - 10), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
     
     # Draw center circle
@@ -183,6 +176,22 @@ def process_tracking_results(tracking_data_path, rink_coordinates_path, rink_ima
             
             if homography_success:
                 homography_matrix = np.array(frame_info.get("homography_matrix"))
+                
+                # Print debug information about the homography points used
+                if 'debug_info' in frame_info:
+                    debug_info = frame_info['debug_info']
+                    if 'common_point_names' in debug_info:
+                        print(f"\nHomography points for frame {frame_id}:")
+                        print("Common point names:", debug_info['common_point_names'])
+                        if 'src_points_used' in debug_info and 'dst_points_used' in debug_info:
+                            print("Source points:")
+                            for i, point in enumerate(debug_info['src_points_used']):
+                                name = debug_info['common_point_names'][i] if i < len(debug_info['common_point_names']) else "unknown"
+                                print(f"  {name}: {point}")
+                            print("Destination points:")
+                            for i, point in enumerate(debug_info['dst_points_used']):
+                                name = debug_info['common_point_names'][i] if i < len(debug_info['common_point_names']) else "unknown"
+                                print(f"  {name}: {point}")
                 
                 # Create quadview
                 quadview = create_quadview(broadcast_frame, rink_img, rink_coordinates, homography_matrix)

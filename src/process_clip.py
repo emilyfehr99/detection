@@ -6,7 +6,7 @@ import time
 from typing import Dict, List, Tuple, Any, Optional
 import json
 
-from player_tracker import PlayerTracker
+from player_tracker import PlayerTracker, NumpyEncoder
 
 
 def process_clip(
@@ -88,10 +88,62 @@ def process_clip(
     frames_processed = 0
     start_time = time.time()
     
+    # Add a hard limit of 60 frames
+    max_frames_to_process = 60
+    
+    # Flag to track if we've processed frame 599
+    processed_frame_599 = False
+    
     while frame_idx < end_frame:
         ret, frame = cap.read()
         if not ret:
             break
+        
+        # Special handling for frame 599 for debugging
+        if frame_idx == 599:
+            print(f"Processing special frame {frame_idx} for debugging")
+            processed_frame_599 = True
+            
+            # Save the original frame 599 for reference
+            debug_dir = os.path.join(output_dir, "debug")
+            if not os.path.exists(debug_dir):
+                os.makedirs(debug_dir)
+            cv2.imwrite(os.path.join(debug_dir, "frame_599_original.jpg"), frame)
+            
+            # Process with full debugging
+            frame_data = tracker.process_frame(frame, frame_idx, debug_mode=True)
+            
+            # Create visualizations
+            visualizations = tracker.visualize_frame(frame, frame_data, rink_image, debug_mode=True)
+            
+            # Save all visualizations for frame 599
+            debug_vis_dir = os.path.join(debug_dir, "frame_599_vis")
+            if not os.path.exists(debug_vis_dir):
+                os.makedirs(debug_vis_dir)
+                
+            for vis_name, vis_img in visualizations.items():
+                if vis_img is not None:
+                    vis_path = os.path.join(debug_vis_dir, f"{vis_name}.jpg")
+                    cv2.imwrite(vis_path, vis_img)
+            
+            # Create and save special overlay for frame 599
+            if "segmentation_mask" in frame_data and frame_data["segmentation_mask"] is not None:
+                # Create overlay of segmentation on original frame
+                seg_overlay = frame.copy()
+                seg_mask = frame_data["segmentation_mask"]
+                
+                # Apply segmentation mask with transparency
+                overlay_alpha = 0.5
+                cv2.addWeighted(seg_mask, overlay_alpha, seg_overlay, 1 - overlay_alpha, 0, seg_overlay)
+                
+                # Save the overlay
+                cv2.imwrite(os.path.join(debug_vis_dir, "segmentation_overlay.jpg"), seg_overlay)
+                
+            # Save the frame data to a separate debug JSON for analysis
+            with open(os.path.join(debug_dir, "frame_599_data.json"), 'w') as f:
+                json.dump(frame_data, f, cls=NumpyEncoder, indent=4)
+                
+            # Continue with normal processing
         
         # Only process every nth frame
         if (frame_idx - start_frame) % frame_step == 0:
@@ -155,9 +207,104 @@ def process_clip(
                 side_by_side_path = os.path.join(frame_dir, "side_by_side.jpg")
                 cv2.imwrite(side_by_side_path, side_by_side)
                 frame_info["side_by_side_path"] = os.path.join("frames", str(frame_idx), "side_by_side.jpg")
+                
+                # Create quadview visualization (broadcast frame, 2D rink, warped frame, warped rink)
+                # Get 2D rink with coordinates overlay
+                rink_with_coords = rink_image.copy()
+                
+                # Draw rink coordinates on the rink image
+                with open(rink_coordinates_path, 'r') as f:
+                    rink_coords = json.load(f)
+                
+                # Draw destination points (boundary of play area)
+                for name, point in rink_coords["destination_points"].items():
+                    x, y = int(point["x"]), int(point["y"])
+                    cv2.circle(rink_with_coords, (x, y), 5, (0, 0, 255), -1)
+                    cv2.putText(rink_with_coords, name, (x + 5, y - 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                
+                # Draw additional points
+                additional = rink_coords["additional_points"]
+                
+                # Draw blue lines
+                blue_lines = additional["blue_lines"]
+                for name, point in blue_lines.items():
+                    x, y = int(point["x"]), int(point["y"])
+                    cv2.circle(rink_with_coords, (x, y), 5, (255, 0, 0), -1)
+                
+                # Draw goal lines with diagonal connection
+                goal_lines = additional["goal_lines"]
+                left_top = (int(goal_lines["left_top"]["x"]), int(goal_lines["left_top"]["y"]))
+                left_bottom = (int(goal_lines["left_bottom"]["x"]), int(goal_lines["left_bottom"]["y"]))
+                right_top = (int(goal_lines["right_top"]["x"]), int(goal_lines["right_top"]["y"]))
+                right_bottom = (int(goal_lines["right_bottom"]["x"]), int(goal_lines["right_bottom"]["y"]))
+                
+                cv2.line(rink_with_coords, left_top, left_bottom, (255, 0, 255), 2)
+                cv2.line(rink_with_coords, right_top, right_bottom, (255, 0, 255), 2)
+                # Draw diagonal goal line
+                cv2.line(rink_with_coords, left_bottom, right_top, (255, 0, 255), 2)
+                
+                # Draw faceoff circles
+                faceoff_circles = additional["faceoff_circles"]
+                for name, circle in faceoff_circles.items():
+                    center = (int(circle["center"]["x"]), int(circle["center"]["y"]))
+                    radius = int(circle["radius"])
+                    cv2.circle(rink_with_coords, center, radius, (0, 255, 0), 2)
+                
+                # Get warped frame
+                warped_frame = None
+                if frame_data["homography_success"] and frame_data["homography_matrix"] is not None:
+                    # Warp the frame using homography matrix
+                    warped_frame = cv2.warpPerspective(
+                        frame, 
+                        frame_data["homography_matrix"], 
+                        (rink_image.shape[1], rink_image.shape[0])
+                    )
+                else:
+                    # Create a placeholder warped frame
+                    warped_frame = np.zeros_like(rink_image)
+                    cv2.putText(warped_frame, "Homography Failed", (50, 300), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                
+                # Create a common size for all quadview images
+                quadview_h, quadview_w = 600, 800
+                
+                # Resize all images to same size
+                broadcast_resized = cv2.resize(visualizations["broadcast"], (quadview_w, quadview_h))
+                rink_resized = cv2.resize(rink_with_coords, (quadview_w, quadview_h))
+                warped_resized = cv2.resize(warped_frame, (quadview_w, quadview_h))
+                
+                # Add titles
+                cv2.putText(broadcast_resized, "Broadcast Frame with Lines", (20, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                cv2.putText(rink_resized, "2D Rink with Coordinates", (20, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+                            
+                cv2.putText(warped_resized, "Warped Broadcast Frame", (20, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                # Create the quadview image
+                top_row = np.hstack((broadcast_resized, rink_resized))
+                bottom_row = np.hstack((warped_resized, warped_resized))  # Using warped frame twice for now
+                quadview = np.vstack((top_row, bottom_row))
+                
+                # Save quadview visualization
+                quadview_path = os.path.join(frame_dir, "quadview.jpg")
+                cv2.imwrite(quadview_path, quadview)
+                frame_info["quadview_path"] = os.path.join("frames", str(frame_idx), "quadview.jpg")
+                
+                # Also save a higher-resolution version to the output directory
+                main_quadview_path = os.path.join(output_dir, f"quadview_frame_{frame_idx}.jpg")
+                cv2.imwrite(main_quadview_path, quadview)
             
             processed_frames_info.append(frame_info)
             frames_processed += 1
+            
+            # Check if we've processed the maximum number of frames
+            if frames_processed >= max_frames_to_process:
+                print(f"Reached maximum frame limit ({max_frames_to_process}). Stopping processing.")
+                break
         
         frame_idx += 1
     
@@ -168,9 +315,21 @@ def process_clip(
     
     print(f"Processed {frames_processed} frames in {processing_time:.2f} seconds ({fps_processed:.2f} fps)")
     
-    # Save tracking data
-    tracking_output = os.path.join(output_dir, "tracking_data.json")
-    tracker.save_tracking_data(tracking_output)
+    # Ensure tracking data is saved
+    try:
+        print("Saving tracking data to JSON...")
+        tracking_output = os.path.join(output_dir, "tracking_data.json")
+        saved_path = tracker.save_tracking_data(tracking_output)
+        print(f"Tracking data saved to: {saved_path}")
+        
+        # Verify the file was created
+        if os.path.exists(saved_path):
+            file_size = os.path.getsize(saved_path)
+            print(f"Tracking data file size: {file_size} bytes")
+        else:
+            print(f"WARNING: Tracking data file was not created at {saved_path}")
+    except Exception as e:
+        print(f"ERROR saving tracking data: {str(e)}")
     
     # Create simple HTML visualization
     create_html_visualization(processed_frames_info, output_dir, video_path)
@@ -200,50 +359,54 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
     <head>
         <title>Hockey Player Tracking Visualization</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            h1 { color: #333; }
-            .frame-container { margin-bottom: 30px; border: 1px solid #ddd; padding: 10px; }
-            .frame-header { background-color: #f0f0f0; padding: 10px; margin-bottom: 10px; }
-            .image-container { margin-top: 10px; }
-            .viz-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-            img { max-width: 100%; border: 1px solid #ccc; }
-            .stats { margin-top: 20px; padding: 10px; background-color: #f8f8f8; }
-            button { padding: 10px; margin: 5px; cursor: pointer; }
-            .active { background-color: #4CAF50; color: white; }
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #333; }}
+            .frame-container {{ margin-bottom: 30px; border: 1px solid #ddd; padding: 10px; }}
+            .frame-header {{ background-color: #f0f0f0; padding: 10px; margin-bottom: 10px; }}
+            .image-container {{ margin-top: 10px; }}
+            .viz-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }}
+            img {{ max-width: 100%; border: 1px solid #ccc; }}
+            .stats {{ margin-top: 20px; padding: 10px; background-color: #f8f8f8; }}
+            button {{ padding: 10px; margin: 5px; cursor: pointer; }}
+            .active {{ background-color: #4CAF50; color: white; }}
         </style>
         <script>
-            function showVisualization(frameId, visType) {
+            function showVisualization(frameId, visType) {{
                 // Hide all visualizations for this frame
                 var visContainers = document.querySelectorAll('#frame-' + frameId + ' .visualization');
-                for (var i = 0; i < visContainers.length; i++) {
+                for (var i = 0; i < visContainers.length; i++) {{
                     visContainers[i].style.display = 'none';
-                }
+                }}
                 
                 // Show the selected visualization
                 var selectedVis = document.getElementById(frameId + '-' + visType);
-                if (selectedVis) {
+                if (selectedVis) {{
                     selectedVis.style.display = 'block';
-                }
+                }}
                 
                 // Update button states
                 var buttons = document.querySelectorAll('#frame-' + frameId + ' button');
-                for (var i = 0; i < buttons.length; i++) {
+                for (var i = 0; i < buttons.length; i++) {{
                     buttons[i].classList.remove('active');
-                    if (buttons[i].getAttribute('data-vis') === visType) {
+                    if (buttons[i].getAttribute('data-vis') === visType) {{
                         buttons[i].classList.add('active');
-                    }
-                }
-            }
+                    }}
+                }}
+            }}
         </script>
     </head>
     <body>
         <h1>Hockey Player Tracking Visualization</h1>
         <div class="stats">
             <h2>Processing Statistics</h2>
-            <p>Video: {video_path}</p>
-            <p>Total frames processed: {total_frames}</p>
+"""
+
+    # Add video path and total frames outside of the initial template
+    html_content += f"""
+            <p>Video: {os.path.basename(video_path)}</p>
+            <p>Total frames processed: {len(frames_info)}</p>
         </div>
-    """
+"""
     
     # Add frames to the HTML
     for frame_info in frames_info:
@@ -263,6 +426,8 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
             vis_types.append(("rink", "Players on Rink"))
         if "side_by_side_path" in frame_info:
             vis_types.append(("side_by_side", "Side by Side"))
+        if "quadview_path" in frame_info:
+            vis_types.append(("quadview", "Quadview"))
         
         # Create buttons
         for vis_type, label in vis_types:
@@ -302,12 +467,6 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
     </body>
     </html>
     """
-    
-    # Format HTML with video path and total frames
-    html_content = html_content.format(
-        video_path=os.path.basename(video_path),
-        total_frames=len(frames_info)
-    )
     
     # Write HTML file
     with open(html_path, 'w') as f:

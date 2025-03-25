@@ -1,115 +1,302 @@
 # Hockey Player Tracking System Documentation
 
-## Overview
-This system processes hockey broadcast footage to track player positions on a standardized 2D rink visualization. The system consists of three main components:
+## PROJECT GOAL
+The primary goal of this project is to develop a robust system that can automatically track player positions on a hockey rink using broadcast footage. This enables advanced analytics for player movement, team formations, and game strategy analysis without requiring expensive in-arena tracking systems.
 
-1. **Rink Segmentation and Homography**: Identifies key rink features (blue lines, center line, etc.) in broadcast frames and computes a homography transformation to map broadcast coordinates to a standardized 2D rink model.
+### Current Progress
+- ✅ Implemented YOLOv8 model for rink feature segmentation
+- ✅ Developed player detection and orientation models
+- ✅ Created a 2D rink model with standardized coordinates
+- ✅ Built a homography calculation system for coordinate transformation
+- ⚠️ Working on improving homography accuracy for robust player tracking
+- ⚠️ Refining the mapping logic for faceoff circles and goal lines
+- ❌ Not yet implemented robust player tracking across multiple frames
 
-2. **Player Detection and Orientation**: Detects players in broadcast footage, determines their positions, and identifies which direction they are facing.
+We're approximately 70% of the way toward a fully functioning system. The main blocker currently is ensuring consistent and accurate homography transformation between the broadcast view and the 2D rink model.
 
-3. **Player Tracking and Visualization**: Maps detected players onto the 2D rink model and tracks their movements over time.
+## System Components and Files
 
-## Project Structure
+### Shell Scripts
 
-### Main Directories
-- `/src`: Contains all source code files
-- `/data`: Contains input data files including:
-  - `rink_coordinates.json`: Defines coordinates of key rink features in the 2D model
-  - `nhl-rink.png`: Base image of the standardized NHL rink
-  - `/videos`: Contains broadcast video footage
-- `/models`: Contains trained models for various tasks:
-  - `detection.pt`: Model for detecting players and goalies
-  - `orient.pth`: Model for detecting player orientation
-  - `segmentation.pt`: Model for segmenting rink features
-- `/output`: Where visualization outputs and tracking data are saved
-- `/documentation`: Additional documentation files
+#### `run_tracking.sh`
+**Purpose**: Main entry point for running the player tracking system
+**Location**: Project root directory
+**Function**: 
+- Ensures the rink image is properly sized
+- Calls the Python tracking script with appropriate parameters
+- Processes a subset of video frames for testing and visualization
+- Creates output directory with timestamp
 
-## Models
+**Usage**: `./run_tracking.sh [start_frame] [end_frame]`
 
-### 1. `detection.pt`
-**Purpose**: Detects players and goalies in broadcast footage.
-**Input**: Video frame
-**Output**: Bounding boxes around detected players/goalies with confidence scores
+#### `initialize_project.sh`
+**Purpose**: Set up the initial project structure and dependencies
+**Location**: Project root directory
+**Function**:
+- Creates necessary directories (data, models, output)
+- Downloads required model files if needed
+- Verifies system requirements
 
-### 2. `orient.pth`
-**Purpose**: Determines the orientation of players (which direction they are facing).
-**Input**: Player crop from detection model
-**Output**: Orientation classification (left, right, or neutral)
+**Usage**: `./initialize_project.sh`
 
-### 3. `segmentation.pt`
-**Purpose**: Segments key rink features (blue lines, center line, goal lines, circles).
-**Input**: Video frame
-**Output**: Segmentation masks for rink features
+### Python Modules
 
-## Processing Pipeline
+#### `segmentation_processor.py`
+**Purpose**: Process video frames to identify key rink features
+**Location**: `/src/segmentation_processor.py`
+**Function**:
+- Loads and runs the YOLOv8 segmentation model
+- Processes segmentation masks to extract features:
+  - Blue lines
+  - Red center line
+  - Goal lines
+  - Faceoff circles
+- Converts segmentation masks to polygon representations
+- Classifies features based on position (left/right)
+- Returns structured data for homography calculation
 
-### 1. Frame Extraction
-- Extract frames from broadcast footage at a specified interval
-- Process a subset of the video for initial testing
+**Key Classes**:
+- `SegmentationProcessor`: Handles model inference and processing
+- `FeatureExtractor`: Extracts key points from segmentation masks
 
-### 2. Rink Segmentation
-- Run segmentation model on each frame
-- Convert segmentation masks to polygons
-- Extract key points (line endpoints, circle centers)
+**Dependencies**:
+- `ultralytics`: For YOLO model inference
+- `cv2`: For image processing
 
-### 3. Homography Calculation
-- Map detected line endpoints to corresponding positions in the 2D rink model
-- Compute homography matrix for each frame
-- Handle frames with insufficient features through interpolation
+#### `homography_calculator.py`
+**Purpose**: Calculate the transformation matrix between broadcast view and 2D rink
+**Location**: `/src/homography_calculator.py`
+**Function**:
+- Identifies corresponding points between detected rink features and 2D model
+- Maps source points (from broadcast) to destination points (on 2D rink)
+- Handles special cases for:
+  - Faceoff circles classification (left/right)
+  - Goal line identification
+  - Blue line mapping
+- Calculates the homography matrix using OpenCV
+- Provides debug information for visualization
 
-### 4. Player Detection
-- Run detection model on each frame
-- Filter detections to focus on players and goalies
-- For each detected player, calculate a reference point (1/3 height from bottom, center width)
+**Key Classes and Methods**:
+- `HomographyCalculator`: Main class for homography calculation
+  - `process_frame()`: Processes a single frame for homography
+  - `calculate_homography()`: Computes the homography matrix
+  - `get_source_points()`: Extracts points from segmentation results
+  - `get_destination_points()`: Gets corresponding points from 2D rink model
 
-### 5. Player Orientation
-- For each detected player, determine orientation using the orient.pth model
-- Classify as facing left, right, or neutral
+**Dependencies**:
+- `numpy`: For numerical operations
+- `cv2`: For homography calculation
+- `json`: For reading rink coordinates
 
-### 6. Coordinate Mapping
-- Apply homography transformation to map player positions from broadcast view to 2D rink model
-- Use the calculated reference point as the player's position
+#### `player_detector.py`
+**Purpose**: Detect and localize players in broadcast frames
+**Location**: `/src/player_detector.py`
+**Function**:
+- Loads and runs player detection model
+- Identifies players and goalies
+- Calculates reference points for each player (usually 1/3 from bottom of bounding box)
+- Filters detections based on confidence scores
+- Returns structured data for player positioning
 
-### 7. Visualization and Output
-- Create visualization showing players on the 2D rink model
-- Track player movements across frames
-- Generate output data in structured format
+**Key Classes**:
+- `PlayerDetector`: Handles model inference and detection processing
 
-## Implementation Plan
+**Dependencies**:
+- `torch`: For model inference
+- `cv2`: For image processing
 
-### Phase 1: Basic Infrastructure
-- Set up project structure
-- Implement frame extraction and basic processing pipeline
-- Create utilities for model inference
+#### `orientation_model.py`
+**Purpose**: Determine which direction players are facing
+**Location**: `/src/orientation_model.py`
+**Function**:
+- Analyzes player crops to determine orientation
+- Classifies players as facing left, right, or neutral
+- Provides confidence scores for orientation predictions
 
-### Phase 2: Feature Implementation
-- Implement segmentation processing and polygon extraction
-- Develop homography calculation module
-- Create player detection and orientation modules
+**Key Classes**:
+- `OrientationModel`: Handles model inference and orientation prediction
 
-### Phase 3: Integration
-- Combine all components into a unified pipeline
-- Process a small subset of video frames
-- Visualize initial results
+**Dependencies**:
+- `torch`: For model inference
+- `cv2`: For image processing
 
-### Phase 4: Refinement
-- Improve tracking accuracy
-- Optimize processing pipeline
-- Handle edge cases
+#### `visualizer.py`
+**Purpose**: Create visualizations of player tracking
+**Location**: `/src/visualizer.py`
+**Function**:
+- Generates "quadview" visualizations showing:
+  - Original broadcast frame
+  - Segmented rink features
+  - Detected players
+  - 2D rink with player positions
+- Creates HTML-based interactive visualizations
+- Writes tracking data to structured formats
 
-### Phase 5: Full System
-- Process full videos
-- Generate comprehensive tracking data
-- Create final visualizations
+**Key Classes**:
+- `TrackingVisualizer`: Handles visualization generation
 
-## Next Steps
-1. Implement frame extraction utility
-2. Create segmentation processing module
-3. Develop homography calculation based on segmentation results
-4. Implement player detection and orientation module
-5. Integrate components and test on sample video
+**Dependencies**:
+- `cv2`: For image manipulation
+- `matplotlib`: For plotting
+- `json`: For data serialization
 
-## Technical Notes
-- Homography calculation requires at least 4 corresponding points between broadcast view and 2D rink
-- Player positions are represented by a point at 1/3 height from bottom of bounding box and center width
-- Orientation is classified as left, right, or neutral based on model output
+#### `tracking_system.py`
+**Purpose**: Main module that orchestrates the entire pipeline
+**Location**: `/src/tracking_system.py`
+**Function**:
+- Integrates all components into a cohesive pipeline
+- Processes video frames sequentially
+- Handles frame extraction
+- Coordinates between different modules
+- Manages output generation
+
+**Key Classes**:
+- `TrackingSystem`: Main class that controls the entire process
+
+**Dependencies**:
+- All other modules in the system
+
+## CURRENT ISSUES
+
+### 1. Faceoff Circle Classification
+The system currently has an issue with correctly classifying faceoff circles as left or right. In certain frames, a faceoff circle is detected on the right side of the frame but is incorrectly classified:
+
+```
+Found 1 faceoff circles at x positions: [1107.0]
+All faceoff circles appear on right side of frame
+Goal line is LEFT (to the left of faceoff circles)
+```
+
+This inconsistency is causing problems with homography calculation because:
+- We're misidentifying the side of the rink being shown in the broadcast
+- This leads to incorrect mappings between source points and destination points
+- The resulting homography matrix produces severe distortion in the transformed coordinates
+
+### 2. Goal Line Classification Relative to Faceoff Circles
+The goal line classification is sometimes inconsistent with faceoff circle classification:
+
+```
+Goal line is LEFT (to the left of faceoff circles)
+```
+
+This statement seems contradictory when the faceoff circle is detected on the right side.
+
+### 3. Homography Calculation Failures
+Despite having enough source and destination points, homography calculation fails in many frames:
+
+```
+Warning: No homography matrix for frame 664
+Warning: No homography matrix for frame 704
+```
+
+These failures occur even when we have:
+- Correctly detected rink features
+- Properly identified source points
+- Valid destination points in the 2D rink model
+
+## NEXT STEPS
+
+### Immediate Fixes Needed
+
+1. **Improve Faceoff Circle Classification Logic**:
+   - Refine the blue line detection to ensure reliable x-position determination
+   - Implement a more robust heuristic for classifying faceoff circles based on:
+     - Position relative to blue line (primary method)
+     - Position relative to center of frame (backup method)
+     - Distance between circles (when multiple circles are detected)
+   - Add extensive logging for debugging classification decisions
+
+2. **Fix Goal Line Classification**:
+   - Ensure goal line classification is consistent with faceoff circle classification
+   - Improve the logic for determining goal line side based on:
+     - Orientation of the line (angle and direction)
+     - Position relative to faceoff circles
+     - Distance from edge of frame
+
+3. **Enhance Homography Robustness**:
+   - Implement fallback mechanisms when the best-case mapping fails
+   - Add frame-to-frame continuity checks to prevent drastic homography changes
+   - Consider using previous frame's homography when current calculation fails
+   - Add homography matrix validation to detect and reject invalid transformations
+
+4. **Add Comprehensive Error Handling**:
+   - Gracefully handle cases with incomplete feature detection
+   - Implement frame skipping for frames with insufficient features
+   - Add recovery mechanisms after detection failures
+
+### Medium-Term Improvements
+
+1. **Implement Player Tracking Across Frames**:
+   - Add player identity persistence across multiple frames
+   - Implement algorithms to handle occlusion and player overlap
+   - Add jersey number recognition for player identification
+
+2. **Improve Visualization System**:
+   - Enhance quadview with additional information
+   - Create a more interactive HTML-based visualization
+   - Add timeline scrubbing for easier navigation
+
+3. **Optimize Performance**:
+   - Improve processing speed through parallelization
+   - Optimize model inference for better throughput
+   - Reduce memory usage for handling longer video sequences
+
+## Technical Details
+
+### Homography Calculation
+The homography calculation is critical for accurately mapping player positions from broadcast footage to the 2D rink model. It requires:
+
+1. At least 4 corresponding points between the broadcast view and the 2D rink model
+2. Accurate classification of rink features (left/right/top/bottom)
+3. Consistent mapping of source points to destination points
+
+The current implementation in `homography_calculator.py` uses OpenCV's `findHomography` function with RANSAC algorithm for robust estimation. The main challenge is correctly identifying corresponding points between the broadcast view and the 2D rink model.
+
+### Player Position Mapping
+Once the homography matrix is calculated, player positions are mapped from broadcast coordinates to 2D rink coordinates using:
+
+```python
+rink_position = cv2.perspectiveTransform(np.array([[broadcast_position]]), homography_matrix)[0][0]
+```
+
+This transformation is why accurate homography calculation is critical - any errors in the homography matrix will lead to incorrect player positioning on the 2D rink.
+
+## Configuration and Data
+
+### `rink_coordinates.json`
+**Purpose**: Defines the coordinates of key rink features in the 2D model
+**Location**: `/data/rink_coordinates.json`
+**Content**:
+- Coordinates for blue lines, center line, goal lines
+- Positions of faceoff circles, center circle
+- Rink boundaries and zones
+
+### `config.json`
+**Purpose**: Configuration parameters for the tracking system
+**Location**: `/config.json`
+**Content**:
+- Model parameters and thresholds
+- Visualization settings
+- Processing options
+
+## Troubleshooting Guide
+
+### Common Issues and Solutions
+
+1. **"No homography matrix" warnings**:
+   - Check if enough rink features are visible in the frame
+   - Verify that feature classification is correct
+   - Inspect source and destination point mappings
+
+2. **Distorted player positions**:
+   - Verify homography matrix calculation
+   - Check for incorrect feature classifications
+   - Inspect quadview visualizations for mapping issues
+
+3. **Missing or incorrect feature detection**:
+   - Adjust segmentation model confidence thresholds
+   - Verify that the frame contains visible rink features
+   - Check for unusual lighting or camera angles
+
+## Contact and Support
+For questions or contributions to the project, please contact the development team.
