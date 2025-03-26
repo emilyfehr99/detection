@@ -185,8 +185,14 @@ class SegmentationProcessor:
             mask_uint8 = (mask * 255).astype(np.uint8)
             
             # Skip masks with no content
-            if np.sum(mask_uint8) == 0:
+            mask_sum = np.sum(mask_uint8)
+            if mask_sum == 0:
                 continue
+            
+            # Add debug logging for BlueLine class
+            if class_name == "BlueLine":
+                logger.info(f"BlueLine mask sum: {mask_sum}")
+                logger.info(f"BlueLine mask unique values: {np.unique(mask_uint8)}")
             
             # Log which classes are being processed
             logger.info(f"Processing mask for class: {class_name}")
@@ -194,7 +200,7 @@ class SegmentationProcessor:
             # Extract appropriate features based on class name
             if class_name in ["BlueLine", "RedCenterLine", "GoalLine"]:
                 # For lines, extract line segments
-                features[class_name] = self._extract_line_segments(mask_uint8)
+                features[class_name] = self._extract_line_segments(mask_uint8, class_name)
             elif class_name in ["RedCircle", "FaceoffCircle"]:
                 # For circles, extract ellipses
                 if class_name == "RedCircle":
@@ -213,7 +219,7 @@ class SegmentationProcessor:
         
         return features
 
-    def _extract_line_segments(self, binary_mask):
+    def _extract_line_segments(self, binary_mask, class_name=None):
         """Extract line segments from binary mask."""
         # Find contours in the binary mask
         contours, _ = cv2.findContours(
@@ -223,161 +229,27 @@ class SegmentationProcessor:
         )
 
         # Filter out very small contours (noise)
-        min_area = 50
+        min_area = 200  # Increased from 100
         contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
         
         # Extract line segments from contours
-        segments = []
-        for contour in contours:
-            # Get min area rectangle
-            rect = cv2.minAreaRect(contour)
-            box = cv2.boxPoints(rect)
-            box = np.int0(box)
-            
-            # Get endpoints (leftmost and rightmost points)
-            leftmost = tuple(
-                contour[contour[:, :, 0].argmin()][0]
-            )
-            rightmost = tuple(
-                contour[contour[:, :, 0].argmax()][0]
-            )
-            topmost = tuple(
-                contour[contour[:, :, 1].argmin()][0]
-            )
-            bottommost = tuple(
-                contour[contour[:, :, 1].argmax()][0]
-            )
-            
-            # Calculate segment length
-            length = np.sqrt(
-                (rightmost[0] - leftmost[0])**2 + 
-                (rightmost[1] - leftmost[1])**2
-            )
-            
-            # Use the longer dimension endpoints
-            vert_length = np.sqrt(
-                (bottommost[1] - topmost[1])**2
-            )
-            if length > vert_length:
-                endpoints = [leftmost, rightmost]
-            else:
-                endpoints = [topmost, bottommost]
-            
-            # Calculate center
-            center = (
-                (endpoints[0][0] + endpoints[1][0])/2,
-                (endpoints[0][1] + endpoints[1][1])/2
-            )
-            
-            # Calculate angle
-            dx = endpoints[1][0] - endpoints[0][0]
-            dy = endpoints[1][1] - endpoints[0][1]
-            angle = np.arctan2(dy, dx) * 180 / np.pi
-            
-            segments.append({
-                'endpoints': endpoints,
-                'center': center,
-                'angle': angle,
-                'length': length
-            })
-
-        # Sort segments by x-coordinate for left-to-right processing
-        segments.sort(key=lambda s: s['center'][0])
-        
-        # Merge segments that are likely part of the same line
-        merged = True
-        while merged:
-            merged = False
-            i = 0
-            while i < len(segments):
-                j = i + 1
-                while j < len(segments):
-                    seg1 = segments[i]
-                    seg2 = segments[j]
-                    
-                    # Calculate endpoints and distances
-                    potential_endpoints = []
-                    for ep1 in seg1['endpoints']:
-                        for ep2 in seg2['endpoints']:
-                            dist = np.sqrt(
-                                (ep2[0] - ep1[0])**2 + 
-                                (ep2[1] - ep1[1])**2
-                            )
-                            potential_endpoints.append(
-                                (ep1, ep2, dist)
-                            )
-                    
-                    # Sort by distance to find furthest endpoints
-                    potential_endpoints.sort(
-                        key=lambda x: x[2], 
-                        reverse=True
-                    )
-                    ep1, ep2, dist = potential_endpoints[0]
-                    
-                    # Calculate angle of potential merged line
-                    dx = ep2[0] - ep1[0]
-                    dy = ep2[1] - ep1[1]
-                    merged_angle = np.arctan2(dy, dx) * 180 / np.pi
-                    
-                    # Calculate x-distance between segments
-                    x_dist = abs(
-                        seg2['center'][0] - seg1['center'][0]
-                    )
-                    
-                    # Allow more angle difference as x-distance increases
-                    # Increase allowed angle difference with distance
-                    max_angle_diff = 15 + (x_dist / 100) * 5
-                    
-                    # Allow more y-difference as x-distance increases
-                    # Increase allowed y-difference with distance
-                    max_y_diff = 50 + (x_dist / 100) * 20
-                    
-                    # Check if segments should be merged
-                    angle_diff = abs(merged_angle - seg1['angle'])
-                    y_diff = abs(
-                        seg1['center'][1] - seg2['center'][1]
-                    )
-                    
-                    # Maximum x-distance threshold
-                    if (angle_diff < max_angle_diff and 
-                            y_diff < max_y_diff and
-                            x_dist < 500):
-                        
-                        # Create new merged segment
-                        new_endpoints = [ep1, ep2]
-                        new_center = (
-                            (ep1[0] + ep2[0])/2,
-                            (ep1[1] + ep2[1])/2
-                        )
-                        new_length = np.sqrt(
-                            (ep2[0] - ep1[0])**2 + 
-                            (ep2[1] - ep1[1])**2
-                        )
-                        
-                        segments[i] = {
-                            'endpoints': new_endpoints,
-                            'center': new_center,
-                            'angle': merged_angle,
-                            'length': new_length
-                        }
-                        
-                        # Remove the second segment
-                        segments.pop(j)
-                        merged = True
-                        break
-                    j += 1
-                if merged:
-                    break
-                i += 1
-        
-        # Convert segments to list of points in expected format
         points = []
-        for segment in segments:
-            for endpoint in segment['endpoints']:
-                points.append({
-                    'x': int(endpoint[0]),
-                    'y': int(endpoint[1])
-                })
+        for contour in contours:
+            # Get all points from contour
+            contour_points = contour.reshape(-1, 2)
+            
+            # Sort points by y-coordinate
+            sorted_points = sorted(contour_points, key=lambda p: p[1])
+            
+            # Get the top and bottom points
+            top_point = sorted_points[0]
+            bottom_point = sorted_points[-1]
+            
+            # Add points in expected format
+            points.extend([
+                {"x": int(top_point[0]), "y": int(top_point[1])},
+                {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
+            ])
         
         # Return points in the expected format
         return [{'points': points}]

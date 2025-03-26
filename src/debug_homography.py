@@ -150,8 +150,7 @@ def draw_homography_points(frame, source_points, dest_points_info, selected_poin
 
 
 def create_debug_view(broadcast_frame, rink_img, homography_info):
-    """
-    Create a debug visualization that shows which points were used for homography.
+    """Create a debug visualization showing points used for homography.
     
     Args:
         broadcast_frame: Original broadcast frame
@@ -169,39 +168,72 @@ def create_debug_view(broadcast_frame, rink_img, homography_info):
     frame_with_points = draw_homography_points(
         broadcast_frame, 
         source_points, 
-        {}, # We don't need destination info for this visualization
+        {},  # No destination info needed
         selected_points
     )
     
     # Warp the frame using homography matrix
-    homography_matrix = homography_info["homography_matrix"]
-    warped_frame = cv2.warpPerspective(
-        broadcast_frame, 
-        homography_matrix, 
-        (rink_img.shape[1], rink_img.shape[0])
-    )
+    h_matrix = homography_info["homography_matrix"]
+    rink_shape = (rink_img.shape[1], rink_img.shape[0])
+    warped_frame = cv2.warpPerspective(broadcast_frame, h_matrix, rink_shape)
     
     # Create a common size for all quadview images
     quadview_h, quadview_w = 600, 800
     
     # Resize all images to same size
-    broadcast_resized = cv2.resize(frame_with_points, (quadview_w, quadview_h))
+    broadcast_resized = cv2.resize(
+        frame_with_points, (quadview_w, quadview_h)
+    )
     rink_resized = cv2.resize(rink_img, (quadview_w, quadview_h))
     warped_resized = cv2.resize(warped_frame, (quadview_w, quadview_h))
     
-    # Add titles
-    cv2.putText(broadcast_resized, "Broadcast Frame with Homography Points", (20, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    # Create overlay of warped frame on rink
+    overlay = rink_resized.copy()
+    alpha = 0.5  # Transparency factor
     
-    cv2.putText(rink_resized, "2D Rink with Coordinates", (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    # Convert warped frame to same color space as rink if needed
+    w_shape = len(warped_resized.shape)
+    r_shape = len(rink_resized.shape)
+    
+    if w_shape == 3 and r_shape == 2:
+        warped_resized = cv2.cvtColor(warped_resized, cv2.COLOR_BGR2GRAY)
+    elif r_shape == 3 and w_shape == 2:
+        warped_resized = cv2.cvtColor(warped_resized, cv2.COLOR_GRAY2BGR)
+    
+    # Create the overlay
+    cv2.addWeighted(warped_resized, alpha, rink_resized, 1 - alpha, 0, overlay)
+    
+    # Add titles
+    title_font = cv2.FONT_HERSHEY_SIMPLEX
+    title_scale = 0.8
+    title_thickness = 2
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    pos = (20, 30)
+    
+    cv2.putText(
+        broadcast_resized, "Broadcast Frame with Points", 
+        pos, title_font, title_scale, white, title_thickness
+    )
+    
+    cv2.putText(
+        rink_resized, "2D Rink with Coordinates",
+        pos, title_font, title_scale, black, title_thickness
+    )
                 
-    cv2.putText(warped_resized, "Warped Broadcast Frame", (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    cv2.putText(
+        warped_resized, "Warped Broadcast Frame",
+        pos, title_font, title_scale, white, title_thickness
+    )
+                
+    cv2.putText(
+        overlay, "Warped Frame Overlay on Rink",
+        pos, title_font, title_scale, black, title_thickness
+    )
     
     # Create the quadview image
     top_row = np.hstack((broadcast_resized, rink_resized))
-    bottom_row = np.hstack((warped_resized, warped_resized.copy()))  # Using warped frame twice for now
+    bottom_row = np.hstack((warped_resized, overlay))
     quadview = np.vstack((top_row, bottom_row))
     
     return quadview
