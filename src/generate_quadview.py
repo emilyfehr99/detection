@@ -131,9 +131,26 @@ def create_quadview(broadcast_frame, rink_img, coordinates, homography_matrix):
     cv2.putText(warped_resized, "Warped Broadcast Frame", (20, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     
+    # Create overlay for bottom right quadrant using rink image as base
+    overlay = rink_resized.copy()
+    
+    # Ensure warped frame and overlay have same number of channels
+    if len(warped_resized.shape) != len(overlay.shape):
+        if len(warped_resized.shape) == 2:
+            warped_resized = cv2.cvtColor(warped_resized, cv2.COLOR_GRAY2BGR)
+        elif len(overlay.shape) == 2:
+            overlay = cv2.cvtColor(overlay, cv2.COLOR_GRAY2BGR)
+    
+    # Create the overlay by blending warped frame with rink image
+    cv2.addWeighted(warped_resized, 0.5, overlay, 0.5, 0, overlay)
+    
+    # Add title to overlay
+    cv2.putText(overlay, "Warped Frame Overlay on Rink", (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+    
     # Create the quadview image
     top_row = np.hstack((broadcast_resized, rink_resized))
-    bottom_row = np.hstack((warped_resized, warped_resized))  # Using warped frame twice for now
+    bottom_row = np.hstack((warped_resized, overlay))
     quadview = np.vstack((top_row, bottom_row))
     
     return quadview

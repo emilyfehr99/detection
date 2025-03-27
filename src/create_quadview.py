@@ -2,9 +2,7 @@
 import cv2
 import numpy as np
 import json
-import os
 import argparse
-from typing import Dict, List, Tuple, Any, Optional
 
 from homography_calculator import HomographyCalculator
 from segmentation_processor import SegmentationProcessor
@@ -106,29 +104,68 @@ def draw_rink_coordinates(rink_img, coordinates):
 
 
 def create_quadview(broadcast_frame, annotated_frame, rink_img, warped_frame):
-    """Create a quadview visualization matching the example layout."""
+    """Create a quadview visualization matching the example layout.
+    
+    Args:
+        broadcast_frame: Original broadcast frame
+        annotated_frame: Frame with segmentation lines
+        rink_img: 2D rink image with coordinates
+        warped_frame: Warped broadcast frame
+        
+    Returns:
+        Quadview visualization image
+    """
     # Resize all images to have consistent dimensions
     height, width = 600, 800
     
     # Resize images
-    broadcast_resized = cv2.resize(broadcast_frame, (width, height))
-    annotated_resized = cv2.resize(annotated_frame, (width, height))
+    broadcast_resized = cv2.resize(annotated_frame, (width, height))
     rink_resized = cv2.resize(rink_img, (width, height))
     warped_resized = cv2.resize(warped_frame, (width, height))
     
     # Add titles
-    cv2.putText(broadcast_resized, "Broadcast Frame with Lines", (20, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    thickness = 2
+    pos = (20, 30)
+    white = (255, 255, 255)
+    black = (0, 0, 0)
     
-    cv2.putText(rink_resized, "2D Rink with Coordinates", (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-                
-    cv2.putText(warped_resized, "Warped Broadcast Frame", (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    # Define titles for each quadrant
+    titles = [
+        (broadcast_resized, "Broadcast Frame with Lines", white),
+        (rink_resized, "2D Rink with Coordinates", black),
+        (warped_resized, "Warped Broadcast Frame", white),
+        (None, "Warped Frame Overlay on Rink", black)
+    ]
+    
+    # Add titles to the first three images
+    for img, text, color in titles[:-1]:
+        cv2.putText(img, text, pos, font, font_scale, color, thickness)
+    
+    # Create overlay for bottom right quadrant
+    overlay = rink_resized.copy()
+    
+    # Ensure warped frame and overlay have same number of channels
+    if len(warped_resized.shape) != len(overlay.shape):
+        if len(warped_resized.shape) == 2:
+            warped_resized = cv2.cvtColor(
+                warped_resized, cv2.COLOR_GRAY2BGR
+            )
+        elif len(overlay.shape) == 2:
+            overlay = cv2.cvtColor(overlay, cv2.COLOR_GRAY2BGR)
+    
+    # Create the overlay by blending warped frame with rink image
+    cv2.addWeighted(warped_resized, 0.5, overlay, 0.5, 0, overlay)
+    
+    # Add title to overlay
+    cv2.putText(
+        overlay, titles[-1][1], pos, font, font_scale, titles[-1][2], thickness
+    )
     
     # Create the 2x2 grid
     top_row = np.hstack((broadcast_resized, rink_resized))
-    bottom_row = np.hstack((warped_resized, warped_resized))  # Placeholder - replace with warped rink view
+    bottom_row = np.hstack((warped_resized, overlay))
     quadview = np.vstack((top_row, bottom_row))
     
     return quadview
@@ -168,43 +205,47 @@ def main():
     # Process the frame to get segmentation features
     segmentation_features = segmentation_processor.process_frame(frame)
     
-    # Create frame with segmentation lines
-    frame_with_lines = frame.copy()
-    homography_calculator.draw_segmentation_lines(frame_with_lines, segmentation_features)
-    
     # Calculate homography
     success, homography_matrix, debug_info = homography_calculator.calculate_homography(segmentation_features)
     
-    if not success:
-        print(f"Warning: Failed to calculate homography for this frame: {debug_info['reason_for_failure']}")
-        print("Using an identity matrix for visualization purposes.")
-        homography_matrix = np.eye(3)
+    # Create frame with segmentation lines and rink features
+    frame_with_lines = homography_calculator.draw_visualization(
+        frame.copy(), 
+        segmentation_features,
+        homography_matrix if success else None
+    )
     
-    # Load rink image and coordinates
+    # Load and draw coordinates on rink image
     rink_img = cv2.imread(args.rink_image)
     if rink_img is None:
         print(f"Error: Could not load rink image {args.rink_image}")
         return
     
+    # Load rink coordinates
     with open(args.rink_coordinates, 'r') as f:
         rink_coordinates = json.load(f)
     
-    # Create rink with overlaid coordinates
+    # Draw coordinates on rink image
     rink_with_coords = draw_rink_coordinates(rink_img, rink_coordinates)
     
-    # Warp the frame to the rink perspective
-    warped_frame = cv2.warpPerspective(
-        frame, 
-        homography_matrix,
-        (rink_img.shape[1], rink_img.shape[0])
-    )
+    # Create warped frame if homography succeeded
+    if success:
+        warped_frame = cv2.warpPerspective(
+            frame, homography_matrix,
+            (rink_img.shape[1], rink_img.shape[0])
+        )
+    else:
+        # Create blank warped frame if homography failed
+        warped_frame = np.zeros_like(rink_img)
+        cv2.putText(warped_frame, "Homography Failed", (50, 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
     
-    # Create the quadview visualization
+    # Create quadview visualization
     quadview = create_quadview(frame, frame_with_lines, rink_with_coords, warped_frame)
     
-    # Save the output
+    # Save output
     cv2.imwrite(args.output, quadview)
-    print(f"Quadview visualization saved to {args.output}")
+    print(f"Saved quadview visualization to {args.output}")
 
 
 if __name__ == "__main__":
