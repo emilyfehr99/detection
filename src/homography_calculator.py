@@ -866,6 +866,10 @@ class HomographyCalculator:
                 if "points" in goal_line:
                     pts = [(int(p["x"]), int(p["y"])) for p in goal_line["points"]]
                     
+                    # Skip if no points
+                    if not pts:
+                        continue
+                    
                     # Calculate average position of this goal line
                     avg_x = sum(p[0] for p in pts) / len(pts)
                     

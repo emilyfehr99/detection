@@ -20,6 +20,7 @@ def process_clip(
     start_second: float = 0.0,
     num_seconds: float = 5.0,
     frame_step: int = 5,
+    max_frames: int = 60,
 ):
     """
     Process a short clip from a video to test the player tracking system.
@@ -35,6 +36,7 @@ def process_clip(
         start_second: Time in seconds to start processing from
         num_seconds: Number of seconds to process
         frame_step: Process every nth frame
+        max_frames: Maximum number of frames to process
     """
     # Create output directory if it doesn't exist
     if not os.path.exists(output_dir):
@@ -88,8 +90,8 @@ def process_clip(
     frames_processed = 0
     start_time = time.time()
     
-    # Add a hard limit of 60 frames
-    max_frames_to_process = 60
+    # Use the max_frames parameter instead of hard-coded value
+    max_frames_to_process = max_frames
     
     # Flag to track if we've processed frame 599
     processed_frame_599 = False
@@ -489,6 +491,7 @@ def main():
     parser.add_argument("--start-second", type=float, default=0.0, help="Time in seconds to start processing from")
     parser.add_argument("--num-seconds", type=float, default=5.0, help="Number of seconds to process")
     parser.add_argument("--frame-step", type=int, default=5, help="Process every nth frame")
+    parser.add_argument("--max-frames", type=int, default=60, help="Maximum number of frames to process")
     
     args = parser.parse_args()
     
@@ -502,7 +505,8 @@ def main():
         output_dir=args.output_dir,
         start_second=args.start_second,
         num_seconds=args.num_seconds,
-        frame_step=args.frame_step
+        frame_step=args.frame_step,
+        max_frames=args.max_frames
     )
 
 

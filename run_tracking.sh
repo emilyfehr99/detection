@@ -3,6 +3,19 @@
 # Hockey Player Tracking Run Script
 # This script simplifies running the player tracking system on a video clip
 
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --max_frames)
+      MAX_FRAMES="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
 # Default values
 VIDEO_PATH="data/videos/PIT_vs_CHI_2016_2.mp4"
 SEGMENTATION_MODEL="models/segmentation.pt"
@@ -11,9 +24,10 @@ ORIENTATION_MODEL="models/orient.pth"
 RINK_COORDINATES="data/rink_coordinates.json"
 RINK_IMAGE="data/rink_resized.png"
 OUTPUT_DIR="output/tracking_results_$(date +%Y%m%d_%H%M%S)"
-START_SECOND=10
-NUM_SECONDS=5
+START_SECOND=0
+NUM_SECONDS=15
 FRAME_STEP=5
+MAX_FRAMES=${MAX_FRAMES:-60}  # Default to 60 if not set
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
@@ -38,7 +52,8 @@ python src/process_clip.py \
   --output-dir $OUTPUT_DIR \
   --start-second $START_SECOND \
   --num-seconds $NUM_SECONDS \
-  --frame-step $FRAME_STEP
+  --frame-step $FRAME_STEP \
+  --max-frames $MAX_FRAMES
 
 # Generate quadview visualizations from the tracking results
 echo "Generating quadview visualizations..."
