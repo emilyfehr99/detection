@@ -232,7 +232,66 @@ class SegmentationProcessor:
         min_area = 200  # Increased from 100
         contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
         
-        # Extract line segments from contours
+        # Special handling for goal lines to connect broken segments
+        if class_name == "GoalLine":
+            # Get all points from all contours
+            all_points = []
+            for contour in contours:
+                contour_points = contour.reshape(-1, 2)
+                all_points.extend(contour_points)
+                
+            if all_points:
+                # Convert to numpy array for easier manipulation
+                all_points = np.array(all_points)
+                
+                # Calculate average x position to determine if this is left or right goal line
+                avg_x = np.mean(all_points[:, 0])
+                frame_center = binary_mask.shape[1] / 2
+                
+                if avg_x < frame_center:
+                    # Left goal line - find absolute bottom-left and top-right points
+                    # For bottom-left: sort by y descending first, then x ascending
+                    # This ensures we get the lowest point, and if there are multiple points
+                    # at the same y, we take the leftmost one
+                    sorted_by_y = all_points[np.argsort(-all_points[:, 1])]  # Sort by y descending
+                    max_y = sorted_by_y[0][1]  # Get the maximum y value
+                    lowest_points = sorted_by_y[sorted_by_y[:, 1] == max_y]  # Get all points with max y
+                    bottom_left = lowest_points[np.argmin(lowest_points[:, 0])]  # Get leftmost point
+                    
+                    # For top-right: sort by y ascending first, then x descending
+                    # This ensures we get the highest point, and if there are multiple points
+                    # at the same y, we take the rightmost one
+                    sorted_by_y = all_points[np.argsort(all_points[:, 1])]  # Sort by y ascending
+                    min_y = sorted_by_y[0][1]  # Get the minimum y value
+                    highest_points = sorted_by_y[sorted_by_y[:, 1] == min_y]  # Get all points with min y
+                    top_right = highest_points[np.argmax(highest_points[:, 0])]  # Get rightmost point
+                    
+                    points = [
+                        {"x": int(top_right[0]), "y": int(top_right[1])},
+                        {"x": int(bottom_left[0]), "y": int(bottom_left[1])}
+                    ]
+                else:
+                    # Right goal line - find absolute bottom-right and top-left points
+                    # For bottom-right: sort by y descending first, then x descending
+                    sorted_by_y = all_points[np.argsort(-all_points[:, 1])]
+                    max_y = sorted_by_y[0][1]
+                    lowest_points = sorted_by_y[sorted_by_y[:, 1] == max_y]
+                    bottom_right = lowest_points[np.argmax(lowest_points[:, 0])]
+                    
+                    # For top-left: sort by y ascending first, then x ascending
+                    sorted_by_y = all_points[np.argsort(all_points[:, 1])]
+                    min_y = sorted_by_y[0][1]
+                    highest_points = sorted_by_y[sorted_by_y[:, 1] == min_y]
+                    top_left = highest_points[np.argmin(highest_points[:, 0])]
+                    
+                    points = [
+                        {"x": int(top_left[0]), "y": int(top_left[1])},
+                        {"x": int(bottom_right[0]), "y": int(bottom_right[1])}
+                    ]
+                
+                return [{'points': points}]
+        
+        # For other line types or if goal line processing failed
         points = []
         for contour in contours:
             # Get all points from contour
@@ -251,7 +310,6 @@ class SegmentationProcessor:
                 {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
             ])
         
-        # Return points in the expected format
         return [{'points': points}]
 
     def _extract_circles(self, mask: np.ndarray, min_radius: int = 10) -> List[Dict]:
