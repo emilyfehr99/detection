@@ -103,70 +103,59 @@ def draw_rink_coordinates(rink_img, coordinates):
     return img
 
 
-def create_quadview(broadcast_frame, annotated_frame, rink_img, warped_frame):
-    """Create a quadview visualization matching the example layout.
+def create_quadview(broadcast_frame, warped_frame, rink_img, draw_rink_coordinates):
+    # Create a 2x2 grid of images
+    height, width = broadcast_frame.shape[:2]
     
-    Args:
-        broadcast_frame: Original broadcast frame
-        annotated_frame: Frame with segmentation lines
-        rink_img: 2D rink image with coordinates
-        warped_frame: Warped broadcast frame
-        
-    Returns:
-        Quadview visualization image
-    """
-    # Resize all images to have consistent dimensions
-    height, width = 600, 800
+    # Top left: Broadcast frame with lines
+    broadcast_resized = cv2.resize(broadcast_frame, (width, height))
     
-    # Resize images
-    broadcast_resized = cv2.resize(annotated_frame, (width, height))
-    rink_resized = cv2.resize(rink_img, (width, height))
+    # Top right: 2D rink with coordinates
+    rink_with_coords = rink_img.copy()
+    draw_rink_coordinates(rink_with_coords)
+    rink_resized = cv2.resize(rink_with_coords, (width, height))
+    
+    # Bottom left: Warped broadcast frame
     warped_resized = cv2.resize(warped_frame, (width, height))
     
-    # Add titles
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 1
-    thickness = 2
-    pos = (20, 30)
-    white = (255, 255, 255)
-    black = (0, 0, 0)
+    # Bottom right: Warped frame overlay on rink
+    # First ensure warped frame has same number of channels as rink image
+    if len(warped_frame.shape) == 2:
+        warped_frame = cv2.cvtColor(warped_frame, cv2.COLOR_GRAY2BGR)
     
-    # Define titles for each quadrant
-    titles = [
-        (broadcast_resized, "Broadcast Frame with Lines", white),
-        (rink_resized, "2D Rink with Coordinates", black),
-        (warped_resized, "Warped Broadcast Frame", white),
-        (None, "Warped Frame Overlay on Rink", black)
-    ]
+    # Create overlay in original rink space (1400x600)
+    rink_overlay = rink_with_coords.copy()
+    overlay = cv2.addWeighted(warped_frame, 0.5, rink_overlay, 0.5, 0)
     
-    # Add titles to the first three images
-    for img, text, color in titles[:-1]:
-        cv2.putText(img, text, pos, font, font_scale, color, thickness)
-    
-    # Create overlay for bottom right quadrant
-    overlay = rink_resized.copy()
-    
-    # Ensure warped frame and overlay have same number of channels
-    if len(warped_resized.shape) != len(overlay.shape):
-        if len(warped_resized.shape) == 2:
-            warped_resized = cv2.cvtColor(
-                warped_resized, cv2.COLOR_GRAY2BGR
-            )
-        elif len(overlay.shape) == 2:
-            overlay = cv2.cvtColor(overlay, cv2.COLOR_GRAY2BGR)
-    
-    # Create the overlay by blending warped frame with rink image
-    cv2.addWeighted(warped_resized, 0.5, overlay, 0.5, 0, overlay)
-    
-    # Add title to overlay
-    cv2.putText(
-        overlay, titles[-1][1], pos, font, font_scale, titles[-1][2], thickness
-    )
+    # Then resize the overlay to match our quadview dimensions
+    overlay_resized = cv2.resize(overlay, (width, height))
     
     # Create the 2x2 grid
     top_row = np.hstack((broadcast_resized, rink_resized))
-    bottom_row = np.hstack((warped_resized, overlay))
+    bottom_row = np.hstack((warped_resized, overlay_resized))
     quadview = np.vstack((top_row, bottom_row))
+    
+    # Add titles to each quadrant
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_thickness = 2
+    font_color = (255, 255, 255)
+    
+    # Add title to top left quadrant
+    cv2.putText(quadview, 'Broadcast Frame with Lines', 
+                (10, 30), font, font_scale, font_color, font_thickness)
+    
+    # Add title to top right quadrant
+    cv2.putText(quadview, '2D Rink with Coordinates',
+                (width + 10, 30), font, font_scale, font_color, font_thickness)
+    
+    # Add title to bottom left quadrant
+    cv2.putText(quadview, 'Warped Broadcast Frame',
+                (10, height + 30), font, font_scale, font_color, font_thickness)
+    
+    # Add title to bottom right quadrant
+    cv2.putText(quadview, 'Warped Frame Overlay on Rink',
+                (width + 10, height + 30), font, font_scale, font_color, font_thickness)
     
     return quadview
 
@@ -241,7 +230,7 @@ def main():
                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
     
     # Create quadview visualization
-    quadview = create_quadview(frame, frame_with_lines, rink_with_coords, warped_frame)
+    quadview = create_quadview(frame, warped_frame, rink_with_coords, draw_rink_coordinates)
     
     # Save output
     cv2.imwrite(args.output, quadview)
