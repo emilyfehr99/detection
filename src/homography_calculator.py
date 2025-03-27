@@ -453,7 +453,7 @@ class HomographyCalculator:
                         is_left_goal = True
                         print(f"Goal line is LEFT (leftmost point {min_x:.1f} is left of faceoff circle)")
                     else:
-                        print(f"Goal line is RIGHT (leftmost point {min_x:.1f} is not left of any faceoff circle)")
+                        print(f"Goal line is RIGHT (no part left of any faceoff circle)")
                 else:
                     # Fallback to frame center if no faceoff circles
                     frame_center_x = self.broadcast_width / 2
@@ -461,23 +461,44 @@ class HomographyCalculator:
                     print(f"Goal line is {'LEFT' if is_left_goal else 'RIGHT'} (using frame center)")
                 
                 # Sort goal points by y-coordinate to find top and bottom
-                goal_points_sorted_by_y = sorted(all_goal_points, key=lambda p: p[1])
-                top_point = goal_points_sorted_by_y[0]
-                bottom_point = goal_points_sorted_by_y[-1]
+                # Filter points to only use the leftmost/rightmost points within certain y-ranges
+                y_min = min(y for _, y in all_goal_points)
+                y_max = max(y for _, y in all_goal_points)
+                y_range = y_max - y_min
                 
-                # Add points with consistent naming
-                goal_side = "left" if is_left_goal else "right"
-                source_points[f"goal_line_{goal_side}_top"] = top_point
-                source_points[f"goal_line_{goal_side}_bottom"] = bottom_point
+                # Define regions for top and bottom (20% from each end)
+                top_region = y_min + y_range * 0.2
+                bottom_region = y_max - y_range * 0.2
                 
-                # Remove any incorrect goal line points to avoid confusion
-                opposite_side = "right" if is_left_goal else "left"
-                if f"goal_line_{opposite_side}_top" in source_points:
-                    del source_points[f"goal_line_{opposite_side}_top"]
-                if f"goal_line_{opposite_side}_bottom" in source_points:
-                    del source_points[f"goal_line_{opposite_side}_bottom"]
+                # Get points in top and bottom regions
+                top_points = [p for p in all_goal_points if p[1] <= top_region]
+                bottom_points = [p for p in all_goal_points if p[1] >= bottom_region]
                 
-                print(f"Selected {goal_side} goal line endpoints at {top_point} (top) and {bottom_point} (bottom)")
+                if top_points and bottom_points:
+                    # For left goal line, use leftmost points
+                    if is_left_goal:
+                        top_point = min(top_points, key=lambda p: p[0])
+                        bottom_point = min(bottom_points, key=lambda p: p[0])
+                    else:
+                        # For right goal line, use rightmost points
+                        top_point = max(top_points, key=lambda p: p[0])
+                        bottom_point = max(bottom_points, key=lambda p: p[0])
+                    
+                    # Add points with consistent naming
+                    goal_side = "left" if is_left_goal else "right"
+                    source_points[f"goal_line_{goal_side}_top"] = top_point
+                    source_points[f"goal_line_{goal_side}_bottom"] = bottom_point
+                    
+                    # Remove any incorrect goal line points to avoid confusion
+                    opposite_side = "right" if is_left_goal else "left"
+                    if f"goal_line_{opposite_side}_top" in source_points:
+                        del source_points[f"goal_line_{opposite_side}_top"]
+                    if f"goal_line_{opposite_side}_bottom" in source_points:
+                        del source_points[f"goal_line_{opposite_side}_bottom"]
+                    
+                    print(f"Selected {goal_side} goal line endpoints at {top_point} (top) and {bottom_point} (bottom)")
+                else:
+                    print("Warning: Could not find valid top and bottom goal line points")
         
         return source_points
     
@@ -1028,28 +1049,8 @@ class HomographyCalculator:
         # Always draw the segmentation features even if homography fails
         vis_frame = self.draw_segmentation_lines(vis_frame, segmentation_features)
         
-        # Draw the homography points and lines only if we have a valid homography matrix
-        if homography is not None:
-            # Draw rink boundaries
-            rink_corners = np.array([
-                [0, 0],
-                [self.rink_width, 0],
-                [self.rink_width, self.rink_height],
-                [0, self.rink_height]
-            ], dtype=np.float32).reshape(-1, 1, 2)
-            
-            # Project rink corners to the broadcast frame
-            try:
-                projected_corners = cv2.perspectiveTransform(rink_corners, np.linalg.inv(homography))
-                projected_corners = projected_corners.astype(int)
-                
-                # Draw rink boundaries in blue
-                cv2.polylines(vis_frame, [projected_corners], True, (255, 0, 0), 2)
-                
-            except Exception as e:
-                self.logger.error(f"Error projecting rink corners: {e}")
-        else:
-            # If no homography, add a text message explaining
+        # If no homography, add a text message explaining
+        if homography is None:
             cv2.putText(vis_frame, "Homography calculation failed", (50, 50), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
         
