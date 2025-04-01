@@ -116,7 +116,8 @@ def process_clip(
             frame_info = {
                 "frame_id": frame_idx,
                 "timestamp": (frame_idx - start_frame) / fps,
-                "num_players": len(frame_data["players"])
+                "num_players": len(frame_data["players"]),
+                "players": frame_data["players"]  # Include the full player detection data
             }
             
             # Create directory for individual frame if it doesn't exist

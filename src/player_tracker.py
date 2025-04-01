@@ -140,7 +140,12 @@ class PlayerTracker:
                 "type": detection["class"],
                 "confidence": detection["confidence"],
                 "bbox": detection["bbox"],
-                "broadcast_position": detection["reference_point"]
+                "reference_point": {
+                    "x": detection["reference_point"]["x"],
+                    "y": detection["reference_point"]["y"],
+                    "pixel_x": detection["reference_point"]["pixel_x"],
+                    "pixel_y": detection["reference_point"]["pixel_y"]
+                }
             }
             
             # Add orientation if available
@@ -218,18 +223,17 @@ class PlayerTracker:
         
         # Draw player detections on broadcast view
         for player in players:
-            if "broadcast_position" in player:
-                pos = player["broadcast_position"]
-                x, y = int(pos["x"]), int(pos["y"])
+            if "reference_point" in player:
+                pos = player["reference_point"]
+                x, y = int(pos["pixel_x"]), int(pos["pixel_y"])
                 
-                # Draw player marker (circle)
-                color = (0, 255, 0) if homography_success else (0, 165, 255)  # Green if homography succeeded, orange otherwise
-                cv2.circle(broadcast_vis, (x, y), 10, color, -1)
+                # Draw player marker (blue dot)
+                cv2.circle(broadcast_vis, (x, y), 4, (255, 0, 0), -1)  # Blue dot
                 
                 # Add player ID if available
                 if "player_id" in player:
                     cv2.putText(broadcast_vis, str(player["player_id"]), 
-                              (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                              (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
         
         # Add frame number
         cv2.putText(broadcast_vis, f"Frame: {frame_idx}", (10, 70), 

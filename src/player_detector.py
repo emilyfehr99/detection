@@ -128,16 +128,21 @@ class PlayerDetector:
                     class_name = self.class_mapping.get(class_id, "unknown")
                     confidence = float(box.conf.item())
                     
-                    # Calculate reference point
-                    ref_x = (x1 + x2) / 2
-                    ref_y = y2 - (y2 - y1) / 3
+                    # Calculate reference point (blue dot)
+                    ref_x = (x1 + x2) / 2  # x-coordinate at center of bbox
+                    ref_y = y2 - (y2 - y1) / 3  # y-coordinate at 1/3 from bottom
                     
                     # Create detection dictionary
                     detection = {
                         "bbox": (x1, y1, x2, y2),
                         "confidence": confidence,
                         "class": class_name,
-                        "reference_point": {"x": ref_x, "y": ref_y}
+                        "reference_point": {
+                            "x": float(ref_x),  # Ensure coordinates are float
+                            "y": float(ref_y),
+                            "pixel_x": int(ref_x),  # Add pixel-space coordinates
+                            "pixel_y": int(ref_y)
+                        }
                     }
                     
                     detections.append(detection)
@@ -228,9 +233,11 @@ class PlayerDetector:
                 
             cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
             
-            # Draw reference point
-            ref_x, ref_y = det["reference_point"].values()
-            cv2.circle(vis_frame, (int(ref_x), int(ref_y)), 5, (255, 0, 0), -1)
+            # Draw reference point (blue dot)
+            ref_point = det["reference_point"]
+            ref_x = int(ref_point["pixel_x"])
+            ref_y = int(ref_point["pixel_y"])
+            cv2.circle(vis_frame, (ref_x, ref_y), 4, (255, 0, 0), -1)
             
             # Draw label with confidence
             label = f"{det['class']} {det['confidence']:.2f}"
