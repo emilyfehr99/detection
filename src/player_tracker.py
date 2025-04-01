@@ -156,12 +156,19 @@ class PlayerTracker:
             # Map position to rink if homography is available
             if self.homography_calculator and frame_data.get("homography_success") and "homography_matrix" in frame_data:
                 try:
-                    rink_positions = self.homography_calculator.apply_homography(
-                        [detection["reference_point"]], frame_data["homography_matrix"]
-                    )
+                    # Extract reference point coordinates
+                    ref_point = [(float(detection["reference_point"]["x"]), float(detection["reference_point"]["y"]))]
+                    
+                    # Transform reference point to rink coordinates
+                    rink_positions = self.homography_calculator.apply_homography(ref_point, frame_data["homography_matrix"])
                     
                     if rink_positions:  # Check if we got any positions back
-                        player_data["rink_position"] = rink_positions[0]
+                        player_data["rink_position"] = {
+                            "x": float(rink_positions[0][0]),  # Ensure coordinates are float
+                            "y": float(rink_positions[0][1]),
+                            "pixel_x": int(rink_positions[0][0]),  # Add pixel-space coordinates
+                            "pixel_y": int(rink_positions[0][1])
+                        }
                 except Exception as e:
                     print(f"Error applying homography to player: {e}")
             
@@ -249,17 +256,20 @@ class PlayerTracker:
             for player in players:
                 if "rink_position" in player:
                     rink_pos = player["rink_position"]
-                    rx, ry = int(rink_pos["x"]), int(rink_pos["y"])
+                    rx, ry = int(rink_pos["pixel_x"]), int(rink_pos["pixel_y"])
                     
                     # Only draw players within rink boundaries
                     if 0 <= rx < rink_vis.shape[1] and 0 <= ry < rink_vis.shape[0]:
-                        # Draw player marker
-                        cv2.circle(rink_vis, (rx, ry), 15, (0, 0, 255), -1)
+                        # Draw player marker (blue dot)
+                        cv2.circle(rink_vis, (rx, ry), 4, (255, 0, 0), -1)  # Blue dot
                         
-                        # Add player ID if available
-                        if "player_id" in player:
-                            cv2.putText(rink_vis, str(player["player_id"]), 
-                                      (rx + 15, ry - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                        # Add player ID and orientation if available
+                        label = player.get("player_id", "")
+                        if "orientation" in player:
+                            label += f" ({player['orientation']})"
+                        if label:
+                            cv2.putText(rink_vis, label, (rx + 10, ry - 10), 
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
             
             visualizations["rink"] = rink_vis
         

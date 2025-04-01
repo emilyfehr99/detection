@@ -117,7 +117,10 @@ def process_clip(
                 "frame_id": frame_idx,
                 "timestamp": (frame_idx - start_frame) / fps,
                 "num_players": len(frame_data["players"]),
-                "players": frame_data["players"]  # Include the full player detection data
+                "players": frame_data["players"],  # Include the full player detection data
+                "homography_matrix": frame_data.get("homography_matrix", None),  # Include homography matrix
+                "homography_success": frame_data.get("homography_success", False),  # Include homography success flag
+                "segmentation_features": frame_data.get("segmentation_features", {})  # Include segmentation features
             }
             
             # Create directory for individual frame if it doesn't exist

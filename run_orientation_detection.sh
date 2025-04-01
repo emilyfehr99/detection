@@ -20,6 +20,9 @@ done
 VIDEO_PATH="data/videos/PIT_vs_CHI_2016_2.mp4"
 DETECTION_MODEL="models/detection.pt"
 ORIENTATION_MODEL="models/orient.pth"
+SEGMENTATION_MODEL="models/segmentation.pt"
+RINK_COORDINATES="data/rink_coordinates.json"
+RINK_IMAGE="data/nhl-rink.png"
 OUTPUT_DIR="output/orientation_detection_$(date +%Y%m%d_%H%M%S)"
 START_SECOND=0
 NUM_SECONDS=15
@@ -35,6 +38,9 @@ python src/process_clip.py \
   --video $VIDEO_PATH \
   --detection-model $DETECTION_MODEL \
   --orientation-model $ORIENTATION_MODEL \
+  --segmentation-model $SEGMENTATION_MODEL \
+  --rink-coordinates $RINK_COORDINATES \
+  --rink-image $RINK_IMAGE \
   --output-dir $OUTPUT_DIR \
   --start-second $START_SECOND \
   --num-seconds $NUM_SECONDS \
