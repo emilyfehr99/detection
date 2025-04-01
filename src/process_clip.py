@@ -11,12 +11,12 @@ from player_tracker import PlayerTracker, NumpyEncoder
 
 def process_clip(
     video_path: str,
-    segmentation_model_path: str,
     detection_model_path: str,
     orientation_model_path: str,
-    rink_coordinates_path: str,
-    rink_image_path: str,
     output_dir: str,
+    segmentation_model_path: Optional[str] = None,
+    rink_coordinates_path: Optional[str] = None,
+    rink_image_path: Optional[str] = None,
     start_second: float = 0.0,
     num_seconds: float = 5.0,
     frame_step: int = 5,
@@ -27,12 +27,12 @@ def process_clip(
     
     Args:
         video_path: Path to the input video
-        segmentation_model_path: Path to the segmentation model
         detection_model_path: Path to the detection model
         orientation_model_path: Path to the orientation model
-        rink_coordinates_path: Path to the rink coordinates JSON
-        rink_image_path: Path to the rink image for visualization
         output_dir: Directory to save outputs
+        segmentation_model_path: Optional path to the segmentation model
+        rink_coordinates_path: Optional path to the rink coordinates JSON
+        rink_image_path: Optional path to the rink image for visualization
         start_second: Time in seconds to start processing from
         num_seconds: Number of seconds to process
         frame_step: Process every nth frame
@@ -47,19 +47,21 @@ def process_clip(
     if not os.path.exists(frames_dir):
         os.makedirs(frames_dir)
     
-    # Initialize player tracker
+    # Initialize player tracker with optional parameters
     tracker = PlayerTracker(
-        segmentation_model_path=segmentation_model_path,
         detection_model_path=detection_model_path,
         orientation_model_path=orientation_model_path,
-        rink_coordinates_path=rink_coordinates_path,
-        output_dir=output_dir
+        output_dir=output_dir,
+        segmentation_model_path=segmentation_model_path,
+        rink_coordinates_path=rink_coordinates_path
     )
     
-    # Load rink image for visualization
-    rink_image = cv2.imread(rink_image_path)
-    if rink_image is None:
-        print(f"Warning: Could not load rink image from {rink_image_path}")
+    # Load rink image for visualization if provided
+    rink_image = None
+    if rink_image_path:
+        rink_image = cv2.imread(rink_image_path)
+        if rink_image is None:
+            print(f"Warning: Could not load rink image from {rink_image_path}")
     
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -93,59 +95,10 @@ def process_clip(
     # Use the max_frames parameter instead of hard-coded value
     max_frames_to_process = max_frames
     
-    # Flag to track if we've processed frame 599
-    processed_frame_599 = False
-    
     while frame_idx < end_frame:
         ret, frame = cap.read()
         if not ret:
             break
-        
-        # Special handling for frame 599 for debugging
-        if frame_idx == 599:
-            print(f"Processing special frame {frame_idx} for debugging")
-            processed_frame_599 = True
-            
-            # Save the original frame 599 for reference
-            debug_dir = os.path.join(output_dir, "debug")
-            if not os.path.exists(debug_dir):
-                os.makedirs(debug_dir)
-            cv2.imwrite(os.path.join(debug_dir, "frame_599_original.jpg"), frame)
-            
-            # Process with full debugging
-            frame_data = tracker.process_frame(frame, frame_idx, debug_mode=True)
-            
-            # Create visualizations
-            visualizations = tracker.visualize_frame(frame, frame_data, rink_image, debug_mode=True)
-            
-            # Save all visualizations for frame 599
-            debug_vis_dir = os.path.join(debug_dir, "frame_599_vis")
-            if not os.path.exists(debug_vis_dir):
-                os.makedirs(debug_vis_dir)
-                
-            for vis_name, vis_img in visualizations.items():
-                if vis_img is not None:
-                    vis_path = os.path.join(debug_vis_dir, f"{vis_name}.jpg")
-                    cv2.imwrite(vis_path, vis_img)
-            
-            # Create and save special overlay for frame 599
-            if "segmentation_mask" in frame_data and frame_data["segmentation_mask"] is not None:
-                # Create overlay of segmentation on original frame
-                seg_overlay = frame.copy()
-                seg_mask = frame_data["segmentation_mask"]
-                
-                # Apply segmentation mask with transparency
-                overlay_alpha = 0.5
-                cv2.addWeighted(seg_mask, overlay_alpha, seg_overlay, 1 - overlay_alpha, 0, seg_overlay)
-                
-                # Save the overlay
-                cv2.imwrite(os.path.join(debug_vis_dir, "segmentation_overlay.jpg"), seg_overlay)
-                
-            # Save the frame data to a separate debug JSON for analysis
-            with open(os.path.join(debug_dir, "frame_599_data.json"), 'w') as f:
-                json.dump(frame_data, f, cls=NumpyEncoder, indent=4)
-                
-            # Continue with normal processing
         
         # Only process every nth frame
         if (frame_idx - start_frame) % frame_step == 0:
@@ -154,15 +107,16 @@ def process_clip(
             # Process the frame
             frame_data = tracker.process_frame(frame, frame_idx)
             
-            # Create visualizations
-            visualizations = tracker.visualize_frame(frame, frame_data, rink_image)
+            # Create visualizations if rink image is provided
+            visualizations = {}
+            if rink_image is not None:
+                visualizations = tracker.visualize_frame(frame, frame_data, rink_image)
             
-            # Save visualizations
+            # Save frame info
             frame_info = {
                 "frame_id": frame_idx,
                 "timestamp": (frame_idx - start_frame) / fps,
-                "num_players": len(frame_data["players"]),
-                "homography_success": frame_data["homography_success"]
+                "num_players": len(frame_data["players"])
             }
             
             # Create directory for individual frame if it doesn't exist
@@ -170,177 +124,69 @@ def process_clip(
             if not os.path.exists(frame_dir):
                 os.makedirs(frame_dir)
             
-            # Save all visualizations
+            # Save original frame
+            cv2.imwrite(os.path.join(frame_dir, "original.jpg"), frame)
+            frame_info["original_frame_path"] = os.path.join("frames", str(frame_idx), "original.jpg")
+            
+            # Save all visualizations if available
             for vis_name, vis_img in visualizations.items():
                 if vis_img is not None:
                     vis_path = os.path.join(frame_dir, f"{vis_name}.jpg")
                     cv2.imwrite(vis_path, vis_img)
                     frame_info[f"{vis_name}_path"] = os.path.join("frames", str(frame_idx), f"{vis_name}.jpg")
             
-            # Create and save side-by-side visualization
-            if "broadcast" in visualizations and "overlay" in visualizations:
-                # Create side-by-side image
-                left_img = visualizations["broadcast"]
-                right_img = visualizations["overlay"]
-                
-                # Resize images to same height
-                h1, w1 = left_img.shape[:2]
-                h2, w2 = right_img.shape[:2]
-                target_height = min(h1, h2)
-                
-                aspect_ratio1 = w1 / h1
-                aspect_ratio2 = w2 / h2
-                
-                new_w1 = int(target_height * aspect_ratio1)
-                new_w2 = int(target_height * aspect_ratio2)
-                
-                left_img_resized = cv2.resize(left_img, (new_w1, target_height))
-                right_img_resized = cv2.resize(right_img, (new_w2, target_height))
-                
-                # Combine images
-                side_by_side = np.zeros((target_height, new_w1 + new_w2, 3), dtype=np.uint8)
-                side_by_side[:, :new_w1] = left_img_resized
-                side_by_side[:, new_w1:] = right_img_resized
-                
-                # Add frame information
-                cv2.putText(side_by_side, f"Frame: {frame_idx}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                # Save side-by-side image
-                side_by_side_path = os.path.join(frame_dir, "side_by_side.jpg")
-                cv2.imwrite(side_by_side_path, side_by_side)
-                frame_info["side_by_side_path"] = os.path.join("frames", str(frame_idx), "side_by_side.jpg")
-                
-                # Create quadview visualization (broadcast frame, 2D rink, warped frame, warped rink)
-                # Get 2D rink with coordinates overlay
-                rink_with_coords = rink_image.copy()
-                
-                # Draw rink coordinates on the rink image
-                with open(rink_coordinates_path, 'r') as f:
-                    rink_coords = json.load(f)
-                
-                # Draw destination points (boundary of play area)
-                for name, point in rink_coords["destination_points"].items():
-                    x, y = int(point["x"]), int(point["y"])
-                    cv2.circle(rink_with_coords, (x, y), 5, (0, 0, 255), -1)
-                    cv2.putText(rink_with_coords, name, (x + 5, y - 5), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                
-                # Draw additional points
-                additional = rink_coords["additional_points"]
-                
-                # Draw blue lines
-                blue_lines = additional["blue_lines"]
-                for name, point in blue_lines.items():
-                    x, y = int(point["x"]), int(point["y"])
-                    cv2.circle(rink_with_coords, (x, y), 5, (255, 0, 0), -1)
-                
-                # Draw goal lines with diagonal connection
-                goal_lines = additional["goal_lines"]
-                left_top = (int(goal_lines["left_top"]["x"]), int(goal_lines["left_top"]["y"]))
-                left_bottom = (int(goal_lines["left_bottom"]["x"]), int(goal_lines["left_bottom"]["y"]))
-                right_top = (int(goal_lines["right_top"]["x"]), int(goal_lines["right_top"]["y"]))
-                right_bottom = (int(goal_lines["right_bottom"]["x"]), int(goal_lines["right_bottom"]["y"]))
-                
-                cv2.line(rink_with_coords, left_top, left_bottom, (255, 0, 255), 2)
-                cv2.line(rink_with_coords, right_top, right_bottom, (255, 0, 255), 2)
-                # Draw diagonal goal line
-                cv2.line(rink_with_coords, left_bottom, right_top, (255, 0, 255), 2)
-                
-                # Draw faceoff circles
-                faceoff_circles = additional["faceoff_circles"]
-                for name, circle in faceoff_circles.items():
-                    center = (int(circle["center"]["x"]), int(circle["center"]["y"]))
-                    radius = int(circle["radius"])
-                    cv2.circle(rink_with_coords, center, radius, (0, 255, 0), 2)
-                
-                # Get warped frame
-                warped_frame = None
-                if frame_data["homography_success"] and frame_data["homography_matrix"] is not None:
-                    # Warp the frame using homography matrix
-                    warped_frame = cv2.warpPerspective(
-                        frame, 
-                        frame_data["homography_matrix"], 
-                        (rink_image.shape[1], rink_image.shape[0])
-                    )
-                else:
-                    # Create a placeholder warped frame
-                    warped_frame = np.zeros_like(rink_image)
-                    cv2.putText(warped_frame, "Homography Failed", (50, 300), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                
-                # Create a common size for all quadview images
-                quadview_h, quadview_w = 600, 800
-                
-                # Resize all images to same size
-                broadcast_resized = cv2.resize(visualizations["broadcast"], (quadview_w, quadview_h))
-                rink_resized = cv2.resize(rink_with_coords, (quadview_w, quadview_h))
-                warped_resized = cv2.resize(warped_frame, (quadview_w, quadview_h))
-                
-                # Add titles
-                cv2.putText(broadcast_resized, "Broadcast Frame with Lines", (20, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                cv2.putText(rink_resized, "2D Rink with Coordinates", (20, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-                            
-                cv2.putText(warped_resized, "Warped Broadcast Frame", (20, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                # Create the quadview image
-                top_row = np.hstack((broadcast_resized, rink_resized))
-                bottom_row = np.hstack((warped_resized, warped_resized))  # Using warped frame twice for now
-                quadview = np.vstack((top_row, bottom_row))
-                
-                # Save quadview visualization
-                quadview_path = os.path.join(frame_dir, "quadview.jpg")
-                cv2.imwrite(quadview_path, quadview)
-                frame_info["quadview_path"] = os.path.join("frames", str(frame_idx), "quadview.jpg")
-                
-                # Also save a higher-resolution version to the output directory
-                main_quadview_path = os.path.join(output_dir, f"quadview_frame_{frame_idx}.jpg")
-                cv2.imwrite(main_quadview_path, quadview)
-            
             processed_frames_info.append(frame_info)
             frames_processed += 1
             
-            # Check if we've processed the maximum number of frames
             if frames_processed >= max_frames_to_process:
-                print(f"Reached maximum frame limit ({max_frames_to_process}). Stopping processing.")
                 break
         
         frame_idx += 1
     
+    # Close video
+    cap.release()
+    
     # Calculate processing time
     end_time = time.time()
     processing_time = end_time - start_time
-    fps_processed = frames_processed / processing_time
+    print(f"\nProcessing complete!")
+    print(f"Processed {frames_processed} frames in {processing_time:.2f} seconds")
+    print(f"Average frame rate: {frames_processed/processing_time:.2f} fps")
     
-    print(f"Processed {frames_processed} frames in {processing_time:.2f} seconds ({fps_processed:.2f} fps)")
+    # Save tracking data
+    tracking_data = {
+        "frames": processed_frames_info,
+        "processing_time": processing_time,
+        "frames_processed": frames_processed,
+        "fps": frames_processed/processing_time,
+        "video_path": video_path,
+        "detection_model": detection_model_path,
+        "orientation_model": orientation_model_path,
+        "segmentation_model": segmentation_model_path,
+        "start_frame": start_frame,
+        "end_frame": end_frame,
+        "frame_step": frame_step
+    }
     
-    # Ensure tracking data is saved
-    try:
-        print("Saving tracking data to JSON...")
-        tracking_output = os.path.join(output_dir, "tracking_data.json")
-        saved_path = tracker.save_tracking_data(tracking_output)
-        print(f"Tracking data saved to: {saved_path}")
-        
-        # Verify the file was created
-        if os.path.exists(saved_path):
-            file_size = os.path.getsize(saved_path)
-            print(f"Tracking data file size: {file_size} bytes")
-        else:
-            print(f"WARNING: Tracking data file was not created at {saved_path}")
-    except Exception as e:
-        print(f"ERROR saving tracking data: {str(e)}")
+    # Generate timestamp for the output file
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    detection_data_path = os.path.join(
+        output_dir, 
+        f"player_detection_data_{timestamp}.json"
+    )
     
-    # Create simple HTML visualization
-    create_html_visualization(processed_frames_info, output_dir, video_path)
+    with open(detection_data_path, 'w') as f:
+        json.dump(tracking_data, f, cls=NumpyEncoder, indent=2)
     
-    # Release resources
-    cap.release()
+    print(f"\nPlayer detection data saved to {detection_data_path}")
+    print(f"File size: {os.path.getsize(detection_data_path)} bytes")
     
-    print(f"Processing complete. Outputs saved to {output_dir}")
-    print(f"Open {os.path.join(output_dir, 'visualization.html')} to view results")
+    # Create HTML visualization if rink image is provided
+    if rink_image is not None:
+        create_html_visualization(processed_frames_info, output_dir, video_path)
+        print(f"\nHTML visualization created at {os.path.join(output_dir, 'visualization.html')}")
+    
+    return processed_frames_info
 
 
 def create_html_visualization(frames_info: List[Dict], output_dir: str, video_path: str) -> None:
@@ -452,7 +298,6 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
             <div class="frame-header">
                 <h2>Frame {frame_info['frame_id']} (Time: {frame_info['timestamp']:.2f}s)</h2>
                 <p>Players detected: {frame_info['num_players']}</p>
-                <p>Homography success: {frame_info['homography_success']}</p>
                 <div class="viz-buttons">
                     {buttons_html}
                 </div>
@@ -482,12 +327,12 @@ def main():
     parser = argparse.ArgumentParser(description="Process a short clip from hockey broadcast footage to test player tracking")
     
     parser.add_argument("--video", type=str, required=True, help="Path to input video")
-    parser.add_argument("--segmentation-model", type=str, required=True, help="Path to segmentation model")
     parser.add_argument("--detection-model", type=str, required=True, help="Path to detection model")
     parser.add_argument("--orientation-model", type=str, required=True, help="Path to orientation model")
-    parser.add_argument("--rink-coordinates", type=str, required=True, help="Path to rink coordinates JSON")
-    parser.add_argument("--rink-image", type=str, required=True, help="Path to rink image")
     parser.add_argument("--output-dir", type=str, required=True, help="Directory to save outputs")
+    parser.add_argument("--segmentation-model", type=str, help="Path to segmentation model")
+    parser.add_argument("--rink-coordinates", type=str, help="Path to rink coordinates JSON")
+    parser.add_argument("--rink-image", type=str, help="Path to rink image")
     parser.add_argument("--start-second", type=float, default=0.0, help="Time in seconds to start processing from")
     parser.add_argument("--num-seconds", type=float, default=5.0, help="Number of seconds to process")
     parser.add_argument("--frame-step", type=int, default=5, help="Process every nth frame")
@@ -497,12 +342,12 @@ def main():
     
     process_clip(
         video_path=args.video,
-        segmentation_model_path=args.segmentation_model,
         detection_model_path=args.detection_model,
         orientation_model_path=args.orientation_model,
+        output_dir=args.output_dir,
+        segmentation_model_path=args.segmentation_model,
         rink_coordinates_path=args.rink_coordinates,
         rink_image_path=args.rink_image,
-        output_dir=args.output_dir,
         start_second=args.start_second,
         num_seconds=args.num_seconds,
         frame_step=args.frame_step,

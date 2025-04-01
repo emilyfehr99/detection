@@ -59,7 +59,7 @@ class HomographyCalculator:
         
         with open(self.rink_coordinates_path, 'r') as f:
             rink_coordinates = json.load(f)
-            
+        
         # Update rink dimensions if available in coordinates
         if 'rink_dimensions' in rink_coordinates:
             self.rink_width = rink_coordinates['rink_dimensions'].get('width', self.rink_width)
