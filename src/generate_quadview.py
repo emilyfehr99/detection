@@ -221,12 +221,15 @@ def create_quadview(
 ):
     """Create a quadview visualization with the following layout:
     Top left: Broadcast footage with segmentation
-    Top right: Players on 2D rink
+    Top right: Warped broadcast frame overlaid on 2D rink with labels
     Bottom left: Broadcast footage with detections
-    Bottom right: Warped broadcast frame overlaid on 2D rink
+    Bottom right: Clean 2D rink with player positions
     """
-    # Get 2D rink with coordinates overlay
+    # Get 2D rink with coordinates overlay for top right
     rink_with_coords = draw_rink_coordinates(rink_img, coordinates)
+    
+    # Create a clean rink image for bottom right (without coordinate labels)
+    clean_rink = rink_img.copy()
     
     # Create a common size for all quadview images
     quadview_h, quadview_w = 600, 800
@@ -281,10 +284,9 @@ def create_quadview(
                         radius = int(radius * scale_x)  # Use x scale for radius
                         cv2.circle(segmentation_vis, center, radius, color, 2)
     
-    title = "Broadcast Frame with Segmentation"
     cv2.putText(
         segmentation_vis,
-        title,
+        "Broadcast Frame with Segmentation",
         (20, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         1,
@@ -293,46 +295,45 @@ def create_quadview(
     )
     quadview[:quadview_h, :quadview_w] = segmentation_vis
     
-    # Create players on rink visualization (top right)
-    rink_vis = cv2.resize(rink_with_coords, (quadview_w, quadview_h))
-    if players:
-        for player in players:
-            if "rink_position" in player:
-                pos = player["rink_position"]
-                # Scale coordinates to visualization size
-                scale_x = quadview_w / rink_img.shape[1]
-                scale_y = quadview_h / rink_img.shape[0]
-                x = int(pos["x"] * scale_x)
-                y = int(pos["y"] * scale_y)
-                
-                # Draw player marker (blue dot)
-                cv2.circle(rink_vis, (x, y), 4, (255, 0, 0), -1)
-                
-                # Add player ID and orientation if available
-                label = player.get("player_id", "")
-                if "orientation" in player:
-                    label += f" ({player['orientation']}°)"
-                if label:
-                    cv2.putText(
-                        rink_vis,
-                        label,
-                        (x + 5, y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        (255, 0, 0),
-                        1
-                    )
-    
-    cv2.putText(
-        rink_vis,
-        "Players on 2D Rink",
-        (20, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (255, 255, 255),
-        2
-    )
-    quadview[:quadview_h, quadview_w:] = rink_vis
+    # Create warped overlay visualization (top right)
+    if homography_matrix is not None:
+        # Warp the frame using homography matrix to rink space
+        warped_frame = cv2.warpPerspective(
+            broadcast_frame,
+            homography_matrix,
+            (rink_img.shape[1], rink_img.shape[0])
+        )
+        
+        # Create overlay in original rink space
+        if len(warped_frame.shape) == 2:
+            warped_frame = cv2.cvtColor(warped_frame, cv2.COLOR_GRAY2BGR)
+        overlay = cv2.addWeighted(warped_frame, 0.5, rink_with_coords, 0.5, 0)
+        
+        # Resize overlay
+        overlay_resized = cv2.resize(overlay, (quadview_w, quadview_h))
+        cv2.putText(
+            overlay_resized,
+            "Warped Frame on 2D Rink",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (255, 255, 255),
+            2
+        )
+        quadview[:quadview_h, quadview_w:] = overlay_resized
+    else:
+        # Create blank image with error message if homography failed
+        error_img = np.zeros((quadview_h, quadview_w, 3), dtype=np.uint8)
+        cv2.putText(
+            error_img,
+            "Homography Failed",
+            (quadview_w//4, quadview_h//2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 0, 255),
+            2
+        )
+        quadview[:quadview_h, quadview_w:] = error_img
     
     # Create detections visualization (bottom left)
     detections_vis = broadcast_resized.copy()
@@ -388,53 +389,46 @@ def create_quadview(
     )
     quadview[quadview_h:, :quadview_w] = detections_vis
     
-    # Create warped overlay visualization (bottom right)
-    if homography_matrix is not None:
-        # Warp frame using homography matrix to rink space (1400x600)
-        warped_frame = cv2.warpPerspective(
-            broadcast_frame,
-            homography_matrix,
-            (rink_img.shape[1], rink_img.shape[0])
-        )
-        
-        # Create overlay in original rink space (1400x600)
-        if len(warped_frame.shape) == 2:
-            warped_frame = cv2.cvtColor(warped_frame, cv2.COLOR_GRAY2BGR)
-        overlay = cv2.addWeighted(
-            warped_frame,
-            0.5,
-            rink_with_coords,
-            0.5,
-            0
-        )
-        
-        # Resize overlay
-        overlay_resized = cv2.resize(overlay, (quadview_w, quadview_h))
-        cv2.putText(
-            overlay_resized,
-            "Warped Frame on 2D Rink",
-            (20, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 255),
-            2
-        )
-        quadview[quadview_h:, quadview_w:] = overlay_resized
-    else:
-        # Create blank image with error message if homography failed
-        error_img = np.zeros((quadview_h, quadview_w, 3), dtype=np.uint8)
-        msg = "Homography Failed"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(
-            error_img,
-            msg,
-            (quadview_w//4, quadview_h//2),
-            font,
-            1,
-            (0, 0, 255),
-            2
-        )
-        quadview[quadview_h:, quadview_w:] = error_img
+    # Create clean rink with players visualization (bottom right)
+    clean_rink_resized = cv2.resize(clean_rink, (quadview_w, quadview_h))
+    if players:
+        for player in players:
+            if "rink_position" in player:
+                pos = player["rink_position"]
+                # Scale coordinates to visualization size
+                scale_x = quadview_w / rink_img.shape[1]
+                scale_y = quadview_h / rink_img.shape[0]
+                x = int(pos["x"] * scale_x)
+                y = int(pos["y"] * scale_y)
+                
+                # Draw player marker (blue dot)
+                cv2.circle(clean_rink_resized, (x, y), 4, (255, 0, 0), -1)
+                
+                # Add player ID and orientation if available
+                label = player.get("player_id", "")
+                if "orientation" in player:
+                    label += f" ({player['orientation']}°)"
+                if label:
+                    cv2.putText(
+                        clean_rink_resized,
+                        label,
+                        (x + 5, y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4,
+                        (255, 0, 0),
+                        1
+                    )
+    
+    cv2.putText(
+        clean_rink_resized,
+        "Players on 2D Rink",
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1,
+        (255, 255, 255),
+        2
+    )
+    quadview[quadview_h:, quadview_w:] = clean_rink_resized
     
     return quadview
 
