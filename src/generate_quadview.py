@@ -297,6 +297,10 @@ def create_quadview(
     
     # Create warped overlay visualization (top right)
     if homography_matrix is not None:
+        # Convert homography matrix to numpy array if it's a list
+        if isinstance(homography_matrix, list):
+            homography_matrix = np.array(homography_matrix, dtype=np.float32)
+        
         # Warp the frame using homography matrix to rink space
         warped_frame = cv2.warpPerspective(
             broadcast_frame,

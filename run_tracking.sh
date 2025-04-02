@@ -55,11 +55,14 @@ python src/process_clip.py \
   --frame-step $FRAME_STEP \
   --max-frames $MAX_FRAMES
 
+# Wait for the tracking data file to be created and get its name
+TRACKING_DATA=$(ls $OUTPUT_DIR/player_detection_data_*.json | head -n 1)
+
 # Generate quadview visualizations from the tracking results
 echo "Generating quadview visualizations..."
 mkdir -p $OUTPUT_DIR/quadview
 python src/generate_quadview.py \
-  --tracking-data $OUTPUT_DIR/tracking_data.json \
+  --tracking-data "$TRACKING_DATA" \
   --rink-image $RINK_IMAGE \
   --rink-coordinates $RINK_COORDINATES \
   --output-dir $OUTPUT_DIR/quadview

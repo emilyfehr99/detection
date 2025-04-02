@@ -116,12 +116,29 @@ def process_clip(
             frame_info = {
                 "frame_id": frame_idx,
                 "timestamp": (frame_idx - start_frame) / fps,
-                "num_players": len(frame_data["players"]),
-                "players": frame_data["players"],  # Include the full player detection data
-                "homography_matrix": frame_data.get("homography_matrix", None),  # Include homography matrix
-                "homography_success": frame_data.get("homography_success", False),  # Include homography success flag
-                "segmentation_features": frame_data.get("segmentation_features", {})  # Include segmentation features
+                "players": [
+                    {
+                        "player_id": p["player_id"],
+                        "type": p["type"],
+                        "bbox": p["bbox"],
+                        "rink_position": p.get("rink_position", None)
+                    } for p in frame_data["players"]
+                ],
+                "homography_success": frame_data.get("homography_success", False)
             }
+            
+            # Only include homography matrix if successful
+            if frame_data.get("homography_success", False):
+                frame_info["homography_matrix"] = frame_data.get("homography_matrix", None)
+            
+            # Only include essential segmentation features
+            if "segmentation_features" in frame_data:
+                frame_info["segmentation_features"] = {
+                    "features": {
+                        k: v for k, v in frame_data["segmentation_features"].get("features", {}).items()
+                        if k in ["blue_lines", "center_line", "goal_lines"]
+                    }
+                }
             
             # Create directory for individual frame if it doesn't exist
             frame_dir = os.path.join(frames_dir, str(frame_idx))
@@ -301,7 +318,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
         <div class="frame-container" id="frame-{frame_info['frame_id']}">
             <div class="frame-header">
                 <h2>Frame {frame_info['frame_id']} (Time: {frame_info['timestamp']:.2f}s)</h2>
-                <p>Players detected: {frame_info['num_players']}</p>
+                <p>Players detected: {len(frame_info['players'])}</p>
                 <div class="viz-buttons">
                     {buttons_html}
                 </div>

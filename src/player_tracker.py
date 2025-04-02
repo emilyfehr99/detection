@@ -290,27 +290,37 @@ class PlayerTracker:
         
         print(f"Preparing tracking data for saving ({len(self.tracking_data)} frames)...")
         
-        # Helper function to filter out non-serializable objects
-        def filter_non_serializable(obj):
-            if isinstance(obj, dict):
-                return {k: filter_non_serializable(v) for k, v in obj.items() 
-                        if k not in ['segmentation_mask', 'raw_masks', 'overlay_visualization']}
-            elif isinstance(obj, list):
-                return [filter_non_serializable(item) for item in obj]
-            elif isinstance(obj, (str, int, float, bool, type(None))):
-                return obj
-            elif isinstance(obj, np.ndarray):
-                # Only keep small arrays
-                if obj.size <= 100:
-                    return obj.tolist()
-                return "large_array_removed"
-            else:
-                return str(obj)
-        
         # Process each frame separately
         for frame_id, frame_data in self.tracking_data.items():
             try:
-                serializable_frame = filter_non_serializable(frame_data)
+                # Only keep essential data
+                serializable_frame = {
+                    "frame_id": frame_data["frame_id"],
+                    "timestamp": frame_data["timestamp"],
+                    "players": [
+                        {
+                            "player_id": p["player_id"],
+                            "type": p["type"],
+                            "bbox": p["bbox"],
+                            "rink_position": p.get("rink_position", None)
+                        } for p in frame_data["players"]
+                    ],
+                    "homography_success": frame_data.get("homography_success", False)
+                }
+                
+                # Only include homography matrix if successful
+                if frame_data.get("homography_success", False):
+                    serializable_frame["homography_matrix"] = frame_data.get("homography_matrix", None)
+                
+                # Only include essential segmentation features
+                if "segmentation_features" in frame_data:
+                    serializable_frame["segmentation_features"] = {
+                        "features": {
+                            k: v for k, v in frame_data["segmentation_features"].get("features", {}).items()
+                            if k in ["blue_lines", "center_line", "goal_lines"]
+                        }
+                    }
+                
                 serializable_data[str(frame_id)] = serializable_frame
             except Exception as e:
                 print(f"Error processing frame {frame_id}: {str(e)}")
@@ -337,14 +347,4 @@ class PlayerTracker:
             
         except Exception as e:
             print(f"Error saving tracking data: {str(e)}")
-            
-            # Try saving in a simpler format as backup
-            backup_path = output_path.replace('.json', '_backup.json')
-            try:
-                print(f"Attempting to save basic tracking data to {backup_path}...")
-                with open(backup_path, 'w') as f:
-                    json.dump({"frames": list(serializable_data.keys())}, f)
-                return backup_path
-            except Exception as e2:
-                print(f"Failed to save backup tracking data: {str(e2)}")
-                return None
+            return None
