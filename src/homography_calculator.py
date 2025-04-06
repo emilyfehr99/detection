@@ -13,14 +13,14 @@ class HomographyCalculator:
     Maps detected rink features in broadcast footage to their corresponding positions in the 2D rink.
     """
 
-    def __init__(self, rink_coordinates_path: str, broadcast_width: int = 1280, broadcast_height: int = 720):
+    def __init__(self, rink_coordinates_path: str, broadcast_width: int = 1948, broadcast_height: int = 1042):
         """
         Initialize the HomographyCalculator with rink coordinates.
         
         Args:
             rink_coordinates_path: Path to the JSON file containing rink coordinates
-            broadcast_width: Width of the broadcast footage (default: 1280)
-            broadcast_height: Height of the broadcast footage (default: 720)
+            broadcast_width: Width of the broadcast footage (default: 1948)
+            broadcast_height: Height of the broadcast footage (default: 1042)
         """
         self.rink_coordinates_path = rink_coordinates_path
         self.broadcast_width = broadcast_width
@@ -133,110 +133,123 @@ class HomographyCalculator:
     
     def extract_source_points(self, segmentation_features: Dict[str, List[Dict]]) -> Dict[str, Tuple[float, float]]:
         """
-        Extract source points from segmentation features.
+        Extract source points from segmentation features for homography calculation.
         
         Args:
             segmentation_features: Dictionary of segmentation features
             
         Returns:
-            Dictionary of source points for homography calculation
+            Dictionary of source points
         """
         source_points = {}
         
-        # Process center line
-        if "RedCenterLine" in segmentation_features and len(segmentation_features["RedCenterLine"]) > 0:
-            center_line = segmentation_features["RedCenterLine"][0]
-            if "points" in center_line and len(center_line["points"]) >= 2:
-                # Get the top and bottom points of the center line
-                if isinstance(center_line["points"][0], dict):
-                    top_point = (float(center_line["points"][0]["x"]), float(center_line["points"][0]["y"]))
-                    bottom_point = (float(center_line["points"][-1]["x"]), float(center_line["points"][-1]["y"]))
-                else:
-                    top_point = (float(center_line["points"][0][0]), float(center_line["points"][0][1]))
-                    bottom_point = (float(center_line["points"][-1][0]), float(center_line["points"][-1][1]))
-                
-                source_points["center_line_top"] = top_point
-                source_points["center_line_bottom"] = bottom_point
-        
         # Process blue lines
-        if "BlueLine" in segmentation_features and len(segmentation_features["BlueLine"]) > 0:
-            # Filter out invalid blue lines
-            valid_blue_lines = []
-            for bl in segmentation_features["BlueLine"]:
-                if "points" not in bl or len(bl["points"]) < 2:
-                    self.logger.info("Skipping blue line with insufficient points")
+        if "BlueLine" in segmentation_features and segmentation_features["BlueLine"]:
+            blue_lines = segmentation_features["BlueLine"]
+            
+            # First, try to identify the red center line to use as a reference
+            center_line_x = None
+            if "RedCenterLine" in segmentation_features and segmentation_features["RedCenterLine"]:
+                center_lines = segmentation_features["RedCenterLine"]
+                for cl in center_lines:
+                    if "points" not in cl or not cl["points"]:
+                        continue
+                    points = cl["points"]
+                    try:
+                        if isinstance(points[0], dict):
+                            x_positions = [float(p["x"]) for p in points]
+                        else:
+                            x_positions = [float(p[0]) for p in points]
+                        center_line_x = sum(x_positions) / len(x_positions)
+                        self.logger.info(f"Found center line at x={center_line_x}")
+                        break
+                    except (IndexError, KeyError, ValueError) as e:
+                        self.logger.warning(f"Error processing center line points: {e}")
+                        continue
+            
+            # Next, try to identify faceoff circles to use as a reference
+            left_faceoff_x = None
+            if "FaceoffCircle" in segmentation_features and segmentation_features["FaceoffCircle"]:
+                faceoff_circles = segmentation_features["FaceoffCircle"]
+                for fc in faceoff_circles:
+                    if "points" not in fc or not fc["points"]:
+                        continue
+                    points = fc["points"]
+                    try:
+                        if isinstance(points[0], dict):
+                            x = float(points[0]["x"])
+                        else:
+                            x = float(points[0][0])
+                        
+                        # If we have a center line reference, use it to determine if this is a left faceoff circle
+                        if center_line_x and x < center_line_x:
+                            left_faceoff_x = x
+                            self.logger.info(f"Found left faceoff circle at x={left_faceoff_x}")
+                            break
+                        # If no center line reference, use frame center
+                        elif x < self.broadcast_width / 2:
+                            left_faceoff_x = x
+                            self.logger.info(f"Found left faceoff circle at x={left_faceoff_x} (using frame center)")
+                            break
+                    except (IndexError, KeyError, ValueError) as e:
+                        self.logger.warning(f"Error processing faceoff circle points: {e}")
+                        continue
+            
+            # Now process each blue line
+            for bl in blue_lines:
+                if "points" not in bl or not bl["points"]:
+                    continue
+                points = bl["points"]
+                if len(points) < 2:
                     continue
                 
-                # Get both top and bottom points
-                points = []
-                try:
-                    if isinstance(bl["points"][0], dict):
-                        points = [(float(p["x"]), float(p["y"])) for p in bl["points"]]
-                    else:
-                        points = [(float(p[0]), float(p[1])) for p in bl["points"]]
-                except (IndexError, KeyError, ValueError) as e:
-                    self.logger.warning(f"Error processing blue line points: {e}")
-                    continue
+                # Get top and bottom points
+                top_point = points[0]
+                bottom_point = points[-1]
                 
-                if not points:
-                    self.logger.info("No valid points extracted from blue line")
-                    continue
+                # Convert to tuple format if needed
+                if isinstance(top_point, dict):
+                    top_point = (float(top_point["x"]), float(top_point["y"]))
+                if isinstance(bottom_point, dict):
+                    bottom_point = (float(bottom_point["x"]), float(bottom_point["y"]))
                 
-                # Calculate line properties
-                dx = points[-1][0] - points[0][0]
-                dy = points[-1][1] - points[0][1]
-                line_length = np.sqrt(dx*dx + dy*dy)
-                angle = abs(np.arctan2(dy, dx) * 180 / np.pi)
+                # Calculate average x position of the blue line
+                avg_x = (top_point[0] + bottom_point[0]) / 2
                 
-                # Only validate y-range to avoid top/bottom of frame
-                y_min = 0.2 * self.broadcast_height
-                y_max = 0.8 * self.broadcast_height
-                if y_min < points[0][1] < y_max:
-                    valid_blue_lines.append({"points": points})
+                # Determine if this is the left or right blue line using multiple rules
+                is_left_blue_line = False
+                
+                # Rule 1: If the blue line is to the right of a left faceoff zone, it's the left blue line
+                if left_faceoff_x and avg_x > left_faceoff_x:
+                    is_left_blue_line = True
+                    self.logger.info(f"Blue line at x={avg_x} is LEFT (right of left faceoff zone at x={left_faceoff_x})")
+                
+                # Rule 2: If the blue line is to the left of the red center line, it's the left blue line
+                elif center_line_x and avg_x < center_line_x:
+                    is_left_blue_line = True
+                    self.logger.info(f"Blue line at x={avg_x} is LEFT (left of center line at x={center_line_x})")
+                
+                # Fallback: Use frame center if no other reference is available
+                else:
+                    frame_center = self.broadcast_width / 2
+                    is_left_blue_line = avg_x < frame_center
+                    self.logger.info(f"Blue line at x={avg_x} is {'LEFT' if is_left_blue_line else 'RIGHT'} (using frame center)")
+                
+                # Assign points based on determination
+                if is_left_blue_line:
+                    source_points["blue_line_left_top"] = top_point
+                    source_points["blue_line_left_bottom"] = bottom_point
                     self.logger.info(
-                        "Valid blue line: "
-                        f"length={line_length:.1f}, angle={angle:.1f}"
+                        f"Added left blue line points: top={top_point}, "
+                        f"bottom={bottom_point}"
                     )
                 else:
+                    source_points["blue_line_right_top"] = top_point
+                    source_points["blue_line_right_bottom"] = bottom_point
                     self.logger.info(
-                        "Rejected blue line: "
-                        f"length={line_length:.1f}, angle={angle:.1f}, "
-                        f"y={points[0][1]}"
+                        f"Added right blue line points: top={top_point}, "
+                        f"bottom={bottom_point}"
                     )
-
-            # Sort valid blue lines by x-coordinate
-            if valid_blue_lines:
-                valid_blue_lines.sort(key=lambda x: x["points"][0][0])
-                
-                # Process each valid blue line
-                for bl in valid_blue_lines:
-                    points = bl["points"]
-                    if not points:
-                        continue
-                        
-                    # Sort points by y-coordinate to get top and bottom
-                    points.sort(key=lambda p: p[1])
-                    top_point = points[0]
-                    bottom_point = points[-1]
-                    
-                    # Use x-position to determine if it's left or right blue line
-                    frame_center = self.broadcast_width / 2
-                    if top_point[0] < frame_center:
-                        # Left blue line
-                        source_points["blue_line_left_top"] = top_point
-                        source_points["blue_line_left_bottom"] = bottom_point
-                        self.logger.info(
-                            f"Added left blue line points: top={top_point}, "
-                            f"bottom={bottom_point}"
-                        )
-                    else:
-                        # Right blue line
-                        source_points["blue_line_right_top"] = top_point
-                        source_points["blue_line_right_bottom"] = bottom_point
-                        self.logger.info(
-                            f"Added right blue line points: top={top_point}, "
-                            f"bottom={bottom_point}"
-                        )
         
         # Process faceoff circles with hockey domain knowledge
         faceoff_circles = []
@@ -264,163 +277,145 @@ class HomographyCalculator:
             if blue_line_points:
                 # Sort blue line x positions
                 blue_line_points.sort()
+                
+                # Try to identify the red center line to use as a reference
+                center_line_x = None
+                if "RedCenterLine" in segmentation_features and segmentation_features["RedCenterLine"]:
+                    center_lines = segmentation_features["RedCenterLine"]
+                    for cl in center_lines:
+                        if "points" not in cl or not cl["points"]:
+                            continue
+                        points = cl["points"]
+                        try:
+                            if isinstance(points[0], dict):
+                                x_positions = [float(p["x"]) for p in points]
+                            else:
+                                x_positions = [float(p[0]) for p in points]
+                            center_line_x = sum(x_positions) / len(x_positions)
+                            self.logger.info(f"Found center line at x={center_line_x}")
+                            break
+                        except (IndexError, KeyError, ValueError) as e:
+                            self.logger.warning(f"Error processing center line points: {e}")
+                            continue
+                
+                # Try to identify faceoff circles to use as a reference
+                left_faceoff_x = None
+                if "FaceoffCircle" in segmentation_features and segmentation_features["FaceoffCircle"]:
+                    faceoff_circles_temp = segmentation_features["FaceoffCircle"]
+                    for fc in faceoff_circles_temp:
+                        if "points" not in fc or not fc["points"]:
+                            continue
+                        points = fc["points"]
+                        try:
+                            if isinstance(points[0], dict):
+                                x = float(points[0]["x"])
+                            else:
+                                x = float(points[0][0])
+                            
+                            # If we have a center line reference, use it to determine if this is a left faceoff circle
+                            if center_line_x and x < center_line_x:
+                                left_faceoff_x = x
+                                self.logger.info(f"Found left faceoff circle at x={left_faceoff_x}")
+                                break
+                            # If no center line reference, use frame center
+                            elif x < self.broadcast_width / 2:
+                                left_faceoff_x = x
+                                self.logger.info(f"Found left faceoff circle at x={left_faceoff_x} (using frame center)")
+                                break
+                        except (IndexError, KeyError, ValueError) as e:
+                            self.logger.warning(f"Error processing faceoff circle points: {e}")
+                            continue
+                
                 if len(blue_line_points) >= 2:
-                    # If we have two blue lines, use the leftmost one
-                    left_blue_line_x = blue_line_points[0]
-                    blue_line_x = blue_line_points[-1]
+                    # If we have two blue lines, determine which is left and which is right
+                    # using the same rules as above
+                    is_first_left = False
+                    
+                    # Rule 1: If the first blue line is to the right of a left faceoff zone, it's the left blue line
+                    if left_faceoff_x and blue_line_points[0] > left_faceoff_x:
+                        is_first_left = True
+                        self.logger.info(f"First blue line at x={blue_line_points[0]} is LEFT (right of left faceoff zone at x={left_faceoff_x})")
+                    
+                    # Rule 2: If the first blue line is to the left of the red center line, it's the left blue line
+                    elif center_line_x and blue_line_points[0] < center_line_x:
+                        is_first_left = True
+                        self.logger.info(f"First blue line at x={blue_line_points[0]} is LEFT (left of center line at x={center_line_x})")
+                    
+                    # Fallback: Use frame center if no other reference is available
+                    else:
+                        frame_center = self.broadcast_width / 2
+                        is_first_left = blue_line_points[0] < frame_center
+                        self.logger.info(f"First blue line at x={blue_line_points[0]} is {'LEFT' if is_first_left else 'RIGHT'} (using frame center)")
+                    
+                    if is_first_left:
+                        left_blue_line_x = blue_line_points[0]
+                        blue_line_x = blue_line_points[-1]
+                        # Add left blue line points
+                        source_points["blue_line_left_top"] = (
+                            blue_lines[0]["points"][0]["x"],
+                            blue_lines[0]["points"][0]["y"]
+                        )
+                        source_points["blue_line_left_bottom"] = (
+                            blue_lines[0]["points"][1]["x"],
+                            blue_lines[0]["points"][1]["y"]
+                        )
+                        # Add right blue line points
+                        source_points["blue_line_right_top"] = (
+                            blue_lines[1]["points"][0]["x"],
+                            blue_lines[1]["points"][0]["y"]
+                        )
+                        source_points["blue_line_right_bottom"] = (
+                            blue_lines[1]["points"][1]["x"],
+                            blue_lines[1]["points"][1]["y"]
+                        )
+                    else:
+                        left_blue_line_x = blue_line_points[-1]
+                        blue_line_x = blue_line_points[0]
+                        # Add right blue line points
+                        source_points["blue_line_right_top"] = (
+                            blue_lines[0]["points"][0]["x"],
+                            blue_lines[0]["points"][0]["y"]
+                        )
+                        source_points["blue_line_right_bottom"] = (
+                            blue_lines[0]["points"][1]["x"],
+                            blue_lines[0]["points"][1]["y"]
+                        )
+                        # Add left blue line points
+                        source_points["blue_line_left_top"] = (
+                            blue_lines[1]["points"][0]["x"],
+                            blue_lines[1]["points"][0]["y"]
+                        )
+                        source_points["blue_line_left_bottom"] = (
+                            blue_lines[1]["points"][1]["x"],
+                            blue_lines[1]["points"][1]["y"]
+                        )
                 else:
-                    # If we only have one blue line, use its position
-                    blue_line_x = blue_line_points[0]
-                    left_blue_line_x = blue_line_x
-
-        # Check for left goal line presence
-        has_left_goal_line = False
-        if "GoalLine" in segmentation_features and segmentation_features["GoalLine"]:
-            goal_lines = segmentation_features["GoalLine"]
-            for gl in goal_lines:
-                if "points" not in gl or not gl["points"]:
-                    continue
-                points = gl["points"]
-                try:
-                    if isinstance(points[0], dict):
-                        x_positions = [float(p["x"]) for p in points]
+                    # If we only have one blue line, determine if it's left or right
+                    # using the same rules as above
+                    is_left = False
+                    
+                    # Rule 1: If the blue line is to the right of a left faceoff zone, it's the left blue line
+                    if left_faceoff_x and blue_line_points[0] > left_faceoff_x:
+                        is_left = True
+                        self.logger.info(f"Single blue line at x={blue_line_points[0]} is LEFT (right of left faceoff zone at x={left_faceoff_x})")
+                    
+                    # Rule 2: If the blue line is to the left of the red center line, it's the left blue line
+                    elif center_line_x and blue_line_points[0] < center_line_x:
+                        is_left = True
+                        self.logger.info(f"Single blue line at x={blue_line_points[0]} is LEFT (left of center line at x={center_line_x})")
+                    
+                    # Fallback: Use frame center if no other reference is available
                     else:
-                        x_positions = [float(p[0]) for p in points]
-                    avg_x = sum(x_positions) / len(x_positions)
+                        frame_center = self.broadcast_width / 2
+                        is_left = blue_line_points[0] < frame_center
+                        self.logger.info(f"Single blue line at x={blue_line_points[0]} is {'LEFT' if is_left else 'RIGHT'} (using frame center)")
                     
-                    # If we have a blue line reference, use it to determine if this is a left goal line
-                    if blue_line_x and avg_x < blue_line_x:
-                        has_left_goal_line = True
-                        self.logger.info("Detected left goal line")
-                        break
-                    # If no blue line reference, use frame center
-                    elif avg_x < self.broadcast_width / 2:
-                        has_left_goal_line = True
-                        self.logger.info("Detected left goal line (using frame center)")
-                        break
-                except (IndexError, KeyError, ValueError) as e:
-                    self.logger.warning(f"Error processing goal line points: {e}")
-                    continue
-
-        # Process faceoff circles
-        if "FaceoffCircle" in segmentation_features:
-            for fc in segmentation_features["FaceoffCircle"]:
-                if "points" not in fc or not fc["points"]:
-                    continue
-                
-                # Extract center point
-                try:
-                    points = fc["points"]
-                    if isinstance(points[0], dict):
-                        center_x = float(points[0]["x"])
-                        center_y = float(points[0]["y"])
+                    if is_left:
+                        left_blue_line_x = blue_line_points[0]
+                        blue_line_x = blue_line_points[0]  # Same line, but we need both variables for consistency
                     else:
-                        center_x = float(points[0][0])
-                        center_y = float(points[0][1])
-                except (IndexError, KeyError, ValueError) as e:
-                    self.logger.warning(f"Error processing faceoff circle points: {e}")
-                    continue
-                
-                # Use the consistent circle_id if available
-                circle_id = fc.get("circle_id", None)
-                if circle_id is not None:
-                    faceoff_circles.append({
-                        "id": circle_id,
-                        "x": center_x,
-                        "y": center_y
-                    })
-            
-            # Log detected faceoff circles
-            if faceoff_circles:
-                x_positions = [(c["id"], c["x"]) for c in faceoff_circles]
-                print(f"Found {len(faceoff_circles)} faceoff circles: {x_positions}")
-                
-                # Sort circles by their consistent IDs to maintain ordering
-                faceoff_circles.sort(key=lambda c: c["id"])
-                
-                # HOCKEY RULE 1: If circles are left of ANY blue line, they are LEFT zone circles
-                # HOCKEY RULE 2: If we see the left goal line, all circles are LEFT zone circles
-                # HOCKEY RULE 3: If we see both blue lines, circles between them are in the neutral zone
-                circle_side = None
-                
-                if has_left_goal_line:
-                    # If we see the left goal line, all circles are LEFT zone circles
-                    circle_side = "left"
-                    print("All faceoff circles are LEFT circles (left goal line visible)")
-                elif left_blue_line_x:
-                    # If we see a blue line, anything to the left of it MUST be in the left zone
-                    if any(circle["x"] < left_blue_line_x for circle in faceoff_circles):
-                        circle_side = "left"
-                        print("All faceoff circles are LEFT circles (at least one circle left of blue line)")
-                    elif blue_line_x and all(left_blue_line_x < circle["x"] < blue_line_x for circle in faceoff_circles):
-                        # Circles between blue lines are in neutral zone
-                        circle_side = "neutral"
-                        print("Faceoff circles are in NEUTRAL zone (between blue lines)")
-                    else:
-                        circle_side = "right"
-                        print("All faceoff circles are RIGHT circles (all circles right of blue line)")
-                else:
-                    # No blue line or goal line visible, fall back to frame position
-                    frame_center_x = self.broadcast_width / 2
-                    all_left = all(circle["x"] < frame_center_x for circle in faceoff_circles)
-                    all_right = all(circle["x"] > frame_center_x for circle in faceoff_circles)
-                    
-                    if all_left:
-                        print("All faceoff circles appear on left side of frame")
-                        circle_side = "left"
-                    elif all_right:
-                        print("All faceoff circles appear on right side of frame")
-                        circle_side = "right"
-                    else:
-                        print("WARNING: Faceoff circles appear on both sides of frame!")
-                        # Use average position as fallback
-                        avg_circle_x = sum(c["x"] for c in faceoff_circles) / len(faceoff_circles)
-                        circle_side = "left" if avg_circle_x < frame_center_x else "right"
-                
-                # Label circles based on their consistent IDs and y-positions
-                if len(faceoff_circles) == 1:
-                    # Just one circle, use y position to determine top/bottom
-                    circle = faceoff_circles[0]
-                    frame_center_y = self.broadcast_height / 2
-                    position = "top" if circle["y"] < frame_center_y else "bottom"
-                    
-                    # Add to source points with consistent naming
-                    if circle_side == "left":
-                        source_points[f"faceoff_left_{position}"] = (circle["x"], circle["y"])
-                        source_points[f"faceoff_circle_{circle['id']}"] = (circle["x"], circle["y"])
-                        source_points[f"faceoff_{position}_left"] = (circle["x"], circle["y"])
-                    elif circle_side == "right":
-                        source_points[f"faceoff_right_{position}"] = (circle["x"], circle["y"])
-                        source_points[f"faceoff_circle_{circle['id']}"] = (circle["x"], circle["y"])
-                        source_points[f"faceoff_{position}_right"] = (circle["x"], circle["y"])
-                        
-                elif len(faceoff_circles) >= 2:
-                    # Multiple circles, use y-positions for top/bottom assignment
-                    circles_by_y = sorted(faceoff_circles, key=lambda c: c["y"])
-                    
-                    # Top circle (lowest y)
-                    top_circle = circles_by_y[0]
-                    if circle_side == "left":
-                        source_points[f"faceoff_left_top"] = (top_circle["x"], top_circle["y"])
-                        source_points[f"faceoff_circle_{top_circle['id']}"] = (top_circle["x"], top_circle["y"])
-                        source_points[f"faceoff_top_left"] = (top_circle["x"], top_circle["y"])
-                    elif circle_side == "right":
-                        source_points[f"faceoff_right_top"] = (top_circle["x"], top_circle["y"])
-                        source_points[f"faceoff_circle_{top_circle['id']}"] = (top_circle["x"], top_circle["y"])
-                        source_points[f"faceoff_top_right"] = (top_circle["x"], top_circle["y"])
-                    
-                    # Bottom circle (highest y)
-                    bottom_circle = circles_by_y[-1]
-                    if circle_side == "left":
-                        source_points[f"faceoff_left_bottom"] = (bottom_circle["x"], bottom_circle["y"])
-                        source_points[f"faceoff_circle_{bottom_circle['id']}"] = (bottom_circle["x"], bottom_circle["y"])
-                        source_points[f"faceoff_bottom_left"] = (bottom_circle["x"], bottom_circle["y"])
-                    elif circle_side == "right":
-                        source_points[f"faceoff_right_bottom"] = (bottom_circle["x"], bottom_circle["y"])
-                        source_points[f"faceoff_circle_{bottom_circle['id']}"] = (bottom_circle["x"], bottom_circle["y"])
-                        source_points[f"faceoff_bottom_right"] = (bottom_circle["x"], bottom_circle["y"])
-                    
-                    print(f"Classified faceoff circles as {circle_side}_top (ID: {top_circle['id']}) and {circle_side}_bottom (ID: {bottom_circle['id']})")
+                        blue_line_x = blue_line_points[0]
+                        left_blue_line_x = blue_line_points[0]  # Same line, but we need both variables for consistency
         
         # Process goal lines as a SINGLE CONTINUOUS LINE regardless of segmentation
         if "GoalLine" in segmentation_features and len(segmentation_features["GoalLine"]) > 0:
@@ -525,215 +520,192 @@ class HomographyCalculator:
         weight = min(ratio, 1/ratio)
         return weight
 
-    def calculate_homography(self, segmentation_features: Dict[str, List[Dict]]) -> Tuple[bool, Optional[np.ndarray], Dict]:
+    def calculate_homography(self, segmentation_features):
         """
-        Calculate the homography matrix between broadcast footage and the 2D rink.
-        Uses weighted points based on line visibility and distance from frame center.
+        Calculate homography matrix between broadcast footage and 2D rink.
+        
+        Args:
+            segmentation_features: Dictionary of detected features
+            
+        Returns:
+            Tuple of (success, homography_matrix, debug_info)
         """
+        # Extract source points from segmentation features
         source_points = self.extract_source_points(segmentation_features)
+        
+        # Get destination points from rink coordinates
         dest_points = self.get_destination_points()
         
-        debug_info = {
-            "source_points": {name: point for name, point in source_points.items()},
-            "destination_points": {name: point for name, point in dest_points.items()},
-            "common_point_names": [],
-            "weights": {}  # Store weights for debugging
-        }
+        # Find common points between source and destination
+        common_points = {}
+        for name, point in source_points.items():
+            if name in dest_points:
+                common_points[name] = (point, dest_points[name])
         
-        try:
-            H = self._calculate_homography_internal(
-                source_points, dest_points, 
-                self.broadcast_width, self.broadcast_height
-            )
-            
-            if self.validate_homography(
-                H, self.broadcast_width, self.broadcast_height,
-                self.rink_width, self.rink_height
-            ):
-                return True, H, debug_info
-            else:
-                debug_info["reason_for_failure"] = "Homography validation failed"
-                return False, H, debug_info
-            
-        except Exception as e:
-            debug_info["reason_for_failure"] = str(e)
-            return False, np.eye(3), debug_info
-
-    def _calculate_homography_internal(
-        self, source_points, dest_points, frame_width, frame_height
-    ):
-        """Calculate homography with weighted point selection."""
-        # Initialize weights
-        point_weights = {}
+        # Need at least 4 points for homography
+        if len(common_points) < 4:
+            return False, None, {
+                "reason_for_failure": "insufficient_points",
+                "points_found": len(common_points),
+                "required_points": 4
+            }
         
-        # Process each point type
-        for point_type in source_points:
-            point = source_points[point_type]
-            if not point:
-                continue
-            
-            if (point_type.startswith('blue_line') or 
-                point_type.startswith('goal_line')):
-                # For line points, calculate line length weight
-                if point_type.endswith('_top'):
-                    # Find corresponding bottom point
-                    bottom_type = point_type.replace('_top', '_bottom')
-                    if bottom_type in source_points:
-                        top_point = point
-                        bottom_point = source_points[bottom_type]
-                        # Calculate line length
-                        dx = top_point[0] - bottom_point[0]
-                        dy = top_point[1] - bottom_point[1]
-                        line_length = np.sqrt(dx*dx + dy*dy)
-                        expected_length = frame_height * 0.8
-                        line_weight = self.calculate_line_weight(
-                            line_length, expected_length
-                        )
-                        
-                        # Calculate weights for both points
-                        center_weight_top = self.calculate_center_weight(
-                            top_point, frame_width, frame_height
-                        )
-                        center_weight_bottom = self.calculate_center_weight(
-                            bottom_point, frame_width, frame_height
-                        )
-                        
-                        # Combine weights with more emphasis on center weight
-                        point_weights[point] = (
-                            0.8 * center_weight_top + 0.2 * line_weight
-                        )
-                        point_weights[bottom_point] = (
-                            0.8 * center_weight_bottom + 0.2 * line_weight
-                        )
-            else:
-                # For non-line points (e.g. faceoff circles), only use center weight
-                center_weight = self.calculate_center_weight(
-                    point, frame_width, frame_height
-                )
-                point_weights[point] = center_weight
+        # Convert points to numpy arrays for homography calculation
+        src_pts = np.float32([p[0] for p in common_points.values()])
+        dst_pts = np.float32([p[1] for p in common_points.values()])
         
-        # Prepare point arrays
-        src_pts = []
-        dst_pts = []
-        weights = []
-        min_weight = 0.01  # Reduced from 0.02
+        # Calculate weights based on feature reliability
+        weights = self._calculate_feature_weights(common_points, segmentation_features)
         
-        # Filter points by weight
-        for point_type in source_points:
-            if point_type not in dest_points:
-                continue
-            
-            src = source_points[point_type]
-            dst = dest_points[point_type]
-            
-            weight = point_weights.get(src, 0.0)
-            if weight > min_weight:
-                src_pts.append(src)
-                dst_pts.append(dst)
-                weights.append(weight)
-        
-        # Check if we have high-confidence points (weight > 0.5)
-        high_confidence_points = sum(1 for w in weights if w > 0.5)
-        min_points = 2 if high_confidence_points >= 2 else 3  # Allow 2 points if they're high confidence
-        
-        if len(src_pts) < min_points:
-            msg = (
-                f"Not enough weighted points "
-                f"(need ≥{min_points}, found {len(src_pts)})"
-            )
-            raise ValueError(msg)
-        
-        # Convert to numpy arrays
-        src_pts = np.array(src_pts, dtype=np.float32).reshape(-1, 1, 2)
-        dst_pts = np.array(dst_pts, dtype=np.float32).reshape(-1, 1, 2)
-        weights = np.array(weights)
-        
-        # Try multiple RANSAC thresholds with more lenient values
-        thresholds = [
-            5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0
-        ]  # Added even higher thresholds
-        best_homography = None
+        # Try multiple RANSAC thresholds
+        ransac_thresholds = [3.0, 5.0, 8.0]  # Start with stricter threshold
+        best_h_matrix = None
         best_inliers = 0
+        best_threshold = None
         
-        for threshold in thresholds:
-            try:
-                H, mask = cv2.findHomography(
-                    src_pts, dst_pts, cv2.RANSAC, threshold
-                )
-                if H is not None:
-                    inliers = np.sum(mask)
-                    if inliers > best_inliers:
-                        best_homography = H
-                        best_inliers = inliers
-            except cv2.error:
-                continue
+        for threshold in ransac_thresholds:
+            h_matrix, mask = cv2.findHomography(
+                src_pts, dst_pts, 
+                method=cv2.RANSAC,
+                ransacReprojThreshold=threshold,
+                maxIters=2000,
+                confidence=0.995
+            )
+            
+            if h_matrix is not None:
+                inliers = np.sum(mask)
+                if inliers > best_inliers:
+                    best_h_matrix = h_matrix
+                    best_inliers = inliers
+                    best_threshold = threshold
         
-        if best_homography is None:
-            raise ValueError("Failed to find valid homography")
+        if best_h_matrix is None:
+            return False, None, {
+                "reason_for_failure": "ransac_failed",
+                "points_attempted": len(common_points)
+            }
         
-        return best_homography
+        # Validate the homography
+        if not self.validate_homography(best_h_matrix):
+            return False, None, {
+                "reason_for_failure": "validation_failed",
+                "ransac_threshold": best_threshold,
+                "inliers": best_inliers
+            }
+        
+        return True, best_h_matrix, {
+            "source_points": source_points,
+            "destination_points": dest_points,
+            "common_point_names": list(common_points.keys()),
+            "ransac_threshold": best_threshold,
+            "inliers": best_inliers,
+            "total_points": len(common_points)
+        }
 
-    def validate_homography(
-        self, H, frame_width, frame_height, rink_width, rink_height
-    ):
+    def _calculate_feature_weights(self, common_points, segmentation_features):
         """
-        Validate homography matrix using corner bounds, area ratio, and diagonal ratio.
-        Uses extremely lenient bounds to allow for more perspective variations.
+        Calculate weights for homography points based on feature reliability.
+        
+        Args:
+            common_points: Dictionary of common points between source and destination
+            segmentation_features: Dictionary of detected features
+            
+        Returns:
+            Array of weights for each point
         """
-        try:
-            # Test corners of the frame
-            corners = np.array([
-                [0, 0],
-                [frame_width, 0],
-                [frame_width, frame_height],
-                [0, frame_height]
-            ], dtype=np.float32)
+        weights = np.ones(len(common_points))
+        
+        for i, (name, (src_pt, _)) in enumerate(common_points.items()):
+            # Base weight on feature type
+            if "goal_line" in name.lower():
+                weights[i] *= 1.5  # Goal lines are usually very reliable
+            elif "blue_line" in name.lower():
+                weights[i] *= 1.2  # Blue lines are generally reliable
+            elif "center_line" in name.lower():
+                weights[i] *= 1.3  # Center line is important for orientation
+            elif "faceoff" in name.lower():
+                weights[i] *= 0.8  # Faceoff circles can be less reliable
             
-            # Transform corners
-            transformed = cv2.perspectiveTransform(
-                corners.reshape(-1, 1, 2), H
-            ).reshape(-1, 2)
+            # Adjust weight based on visibility
+            if name in segmentation_features:
+                feature = segmentation_features[name]
+                if "confidence" in feature:
+                    weights[i] *= feature["confidence"]
+                # Adjust weight based on feature quality
+                if "quality_score" in feature:
+                    weights[i] *= feature["quality_score"]
             
-            # Check corner bounds - extremely lenient bounds
-            max_width = rink_width * 10  # Was 6, now 10
-            max_height = rink_height * 10  # Was 6, now 10
+            # Adjust weight based on distance from frame center
+            center_weight = self.calculate_center_weight(src_pt, self.broadcast_width, self.broadcast_height)
+            weights[i] *= center_weight
+        
+        # Normalize weights
+        weights = weights / np.sum(weights)
+        return weights
+
+    def validate_homography(self, h_matrix):
+        """
+        Validate homography matrix using multiple criteria.
+        
+        Args:
+            h_matrix: Homography matrix to validate
             
-            # Check if any transformed point is outside reasonable bounds
-            for point in transformed:
-                x_out = point[0] < -max_width or point[0] > max_width * 5
-                y_out = point[1] < -max_height or point[1] > max_height * 5
-                if x_out or y_out:
-                    raise ValueError("Corners outside reasonable bounds")
-            
-            # Check area ratio - extremely lenient bounds
-            src_area = cv2.contourArea(corners)
-            dst_area = cv2.contourArea(transformed)
-            area_ratio = dst_area / src_area
-            
-            # Allow extremely extreme area ratios
-            if area_ratio < 0.01 or area_ratio > 100:  # Was 0.02-50
-                raise ValueError(f"Area ratio {area_ratio:.2f} invalid")
-            
-            # Check diagonal ratios - extremely lenient bounds
-            src_diag1 = np.linalg.norm(corners[2] - corners[0])
-            src_diag2 = np.linalg.norm(corners[3] - corners[1])
-            src_ratio = src_diag1 / src_diag2
-            
-            dst_diag1 = np.linalg.norm(transformed[2] - transformed[0])
-            dst_diag2 = np.linalg.norm(transformed[3] - transformed[1])
-            dst_ratio = dst_diag1 / dst_diag2
-            
-            # Allow extremely extreme diagonal ratios
-            ratio = dst_ratio / src_ratio
-            if ratio < 0.05 or ratio > 20.0:  # Was 0.1-10
-                raise ValueError(f"Diagonal ratio {ratio:.2f} invalid")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Homography validation failed - {str(e)}")
+        Returns:
+            Boolean indicating if homography is valid
+        """
+        if h_matrix is None:
             return False
-    
+        
+        # Check if matrix is well-formed
+        if not isinstance(h_matrix, np.ndarray) or h_matrix.shape != (3, 3):
+            return False
+        
+        # Check corner bounds
+        corners = np.float32([
+            [0, 0],
+            [self.broadcast_width, 0],
+            [self.broadcast_width, self.broadcast_height],
+            [0, self.broadcast_height]
+        ])
+        
+        transformed_corners = cv2.perspectiveTransform(
+            corners.reshape(-1, 1, 2), 
+            h_matrix
+        ).reshape(-1, 2)
+        
+        # Check if corners are within reasonable bounds
+        rink_width = self.rink_width
+        rink_height = self.rink_height
+        
+        margin = 0.5  # Allow 50% margin outside rink bounds
+        min_x = -rink_width * margin
+        max_x = rink_width * (1 + margin)
+        min_y = -rink_height * margin
+        max_y = rink_height * (1 + margin)
+        
+        for corner in transformed_corners:
+            if not (min_x <= corner[0] <= max_x and min_y <= corner[1] <= max_y):
+                return False
+        
+        # Check area ratio
+        original_area = self.broadcast_width * self.broadcast_height
+        transformed_area = cv2.contourArea(transformed_corners)
+        area_ratio = transformed_area / original_area
+        
+        if not (0.05 <= area_ratio <= 20.0):  # Allow for more significant perspective changes
+            return False
+        
+        # Check diagonal ratio
+        original_diag = np.sqrt(self.broadcast_width**2 + self.broadcast_height**2)
+        transformed_diag1 = np.linalg.norm(transformed_corners[1] - transformed_corners[3])
+        transformed_diag2 = np.linalg.norm(transformed_corners[0] - transformed_corners[2])
+        diag_ratio = max(transformed_diag1, transformed_diag2) / original_diag
+        
+        if not (0.1 <= diag_ratio <= 10.0):  # Allow for more significant perspective changes
+            return False
+        
+        return True
+
     def get_average_matrix(self) -> Optional[np.ndarray]:
         """
         Calculate an average homography matrix from recent valid matrices.

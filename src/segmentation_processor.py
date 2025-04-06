@@ -221,7 +221,72 @@ class SegmentationProcessor:
 
     def _extract_line_segments(self, binary_mask, class_name=None):
         """Extract line segments from binary mask."""
-        # Find contours in the binary mask
+        # Special handling for blue lines to ensure proper separation
+        if class_name == "BlueLine":
+            # Get the center line position
+            center_x = binary_mask.shape[1] // 2
+            
+            # Create separate masks for left and right blue lines
+            left_mask = binary_mask.copy()
+            right_mask = binary_mask.copy()
+            
+            # Zero out the right side of the left mask
+            left_mask[:, center_x:] = 0
+            # Zero out the left side of the right mask
+            right_mask[:, :center_x] = 0
+            
+            # Process each side separately
+            left_contours, _ = cv2.findContours(
+                left_mask.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE
+            )
+            right_contours, _ = cv2.findContours(
+                right_mask.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE
+            )
+            
+            # Filter and process contours
+            min_area = 200
+            left_points = []
+            right_points = []
+            
+            # Process left contours
+            for contour in left_contours:
+                if cv2.contourArea(contour) > min_area:
+                    contour_points = contour.reshape(-1, 2)
+                    sorted_points = sorted(contour_points, key=lambda p: p[1])
+                    if len(sorted_points) > 0:
+                        top_point = sorted_points[0]
+                        bottom_point = sorted_points[-1]
+                        left_points.extend([
+                            {"x": int(top_point[0]), "y": int(top_point[1])},
+                            {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
+                        ])
+            
+            # Process right contours
+            for contour in right_contours:
+                if cv2.contourArea(contour) > min_area:
+                    contour_points = contour.reshape(-1, 2)
+                    sorted_points = sorted(contour_points, key=lambda p: p[1])
+                    if len(sorted_points) > 0:
+                        top_point = sorted_points[0]
+                        bottom_point = sorted_points[-1]
+                        right_points.extend([
+                            {"x": int(top_point[0]), "y": int(top_point[1])},
+                            {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
+                        ])
+            
+            # Return separate features for left and right blue lines
+            features = []
+            if left_points:
+                features.append({'points': left_points})
+            if right_points:
+                features.append({'points': right_points})
+            return features
+        
+        # For other line types, use the original logic
         contours, _ = cv2.findContours(
             binary_mask.astype(np.uint8), 
             cv2.RETR_EXTERNAL, 
@@ -250,21 +315,15 @@ class SegmentationProcessor:
                 
                 if avg_x < frame_center:
                     # Left goal line - find absolute bottom-left and top-right points
-                    # For bottom-left: sort by y descending first, then x ascending
-                    # This ensures we get the lowest point, and if there are multiple points
-                    # at the same y, we take the leftmost one
-                    sorted_by_y = all_points[np.argsort(-all_points[:, 1])]  # Sort by y descending
-                    max_y = sorted_by_y[0][1]  # Get the maximum y value
-                    lowest_points = sorted_by_y[sorted_by_y[:, 1] == max_y]  # Get all points with max y
-                    bottom_left = lowest_points[np.argmin(lowest_points[:, 0])]  # Get leftmost point
+                    sorted_by_y = all_points[np.argsort(-all_points[:, 1])]
+                    max_y = sorted_by_y[0][1]
+                    lowest_points = sorted_by_y[sorted_by_y[:, 1] == max_y]
+                    bottom_left = lowest_points[np.argmin(lowest_points[:, 0])]
                     
-                    # For top-right: sort by y ascending first, then x descending
-                    # This ensures we get the highest point, and if there are multiple points
-                    # at the same y, we take the rightmost one
-                    sorted_by_y = all_points[np.argsort(all_points[:, 1])]  # Sort by y ascending
-                    min_y = sorted_by_y[0][1]  # Get the minimum y value
-                    highest_points = sorted_by_y[sorted_by_y[:, 1] == min_y]  # Get all points with min y
-                    top_right = highest_points[np.argmax(highest_points[:, 0])]  # Get rightmost point
+                    sorted_by_y = all_points[np.argsort(all_points[:, 1])]
+                    min_y = sorted_by_y[0][1]
+                    highest_points = sorted_by_y[sorted_by_y[:, 1] == min_y]
+                    top_right = highest_points[np.argmax(highest_points[:, 0])]
                     
                     points = [
                         {"x": int(top_right[0]), "y": int(top_right[1])},
@@ -272,13 +331,11 @@ class SegmentationProcessor:
                     ]
                 else:
                     # Right goal line - find absolute bottom-right and top-left points
-                    # For bottom-right: sort by y descending first, then x descending
                     sorted_by_y = all_points[np.argsort(-all_points[:, 1])]
                     max_y = sorted_by_y[0][1]
                     lowest_points = sorted_by_y[sorted_by_y[:, 1] == max_y]
                     bottom_right = lowest_points[np.argmax(lowest_points[:, 0])]
                     
-                    # For top-left: sort by y ascending first, then x ascending
                     sorted_by_y = all_points[np.argsort(all_points[:, 1])]
                     min_y = sorted_by_y[0][1]
                     highest_points = sorted_by_y[sorted_by_y[:, 1] == min_y]
