@@ -278,7 +278,7 @@ def process_frame(frame_path, rink_image_path, rink_coordinates_path, output_pat
     
     # Process the frame
     segmentation_result = segmentation_processor.process_frame(frame)
-    segmentation_features = segmentation_result["features"]
+    segmentation_features = segmentation_result
     segmentation_mask = segmentation_result["segmentation_mask"]
     
     # Save the segmentation mask as a separate image
@@ -287,7 +287,7 @@ def process_frame(frame_path, rink_image_path, rink_coordinates_path, output_pat
     
     # Print detected features
     print("\nDetected Features:")
-    for feature_type, features in segmentation_features.items():
+    for feature_type, features in segmentation_features["features"].items():
         print(f"{feature_type}: {len(features)} instances")
         for i, feature in enumerate(features):
             if i < 3:  # Print just a few examples to avoid clutter

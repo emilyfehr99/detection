@@ -192,15 +192,15 @@ def main():
     )
     
     # Process the frame to get segmentation features
-    segmentation_features = segmentation_processor.process_frame(frame)
+    segmentation_result = segmentation_processor.process_frame(frame)
     
     # Calculate homography
-    success, homography_matrix, debug_info = homography_calculator.calculate_homography(segmentation_features)
+    success, homography_matrix, debug_info = homography_calculator.calculate_homography(segmentation_result)
     
     # Create frame with segmentation lines and rink features
     frame_with_lines = homography_calculator.draw_visualization(
         frame.copy(), 
-        segmentation_features,
+        segmentation_result["features"],
         homography_matrix if success else None
     )
     

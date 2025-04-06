@@ -117,12 +117,22 @@ class PlayerTracker:
                 
                 if success and homography_matrix is not None:
                     frame_data["homography_matrix"] = homography_matrix
+                    # Store successful homography matrix in cache
+                    self.homography_calculator.homography_cache[frame_id] = homography_matrix
                     print(f"Homography calculation successful for frame {frame_id}")
                 else:
-                    print(
-                        f"Homography calculation failed for frame {frame_id}: "
-                        f"{debug_info.get('reason_for_failure', 'unknown')}"
-                    )
+                    # Try to get interpolated matrix for this frame
+                    interpolated_matrix = self.homography_calculator.get_homography_matrix(frame_id)
+                    if interpolated_matrix is not None:
+                        frame_data["homography_matrix"] = interpolated_matrix
+                        frame_data["homography_success"] = True
+                        frame_data["homography_debug_info"] = {"reason": "interpolated"}
+                        print(f"Using interpolated homography for frame {frame_id}")
+                    else:
+                        print(
+                            f"Homography calculation failed for frame {frame_id}: "
+                            f"{debug_info.get('reason_for_failure', 'unknown')}"
+                        )
         
         # Step 3: Detect players
         player_detections = self.player_detector.process_frame(frame, frame_id)
