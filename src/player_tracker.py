@@ -4,11 +4,13 @@ import os
 import json
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime
+import logging
 
 from segmentation_processor import SegmentationProcessor
 from player_detector import PlayerDetector
 from orientation_detector import OrientationDetector
 from homography_calculator import HomographyCalculator
+from ultralytics import YOLO
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -79,6 +81,9 @@ class PlayerTracker:
         # Initialize tracking data
         self.tracking_data = {}
         
+        # Initialize logger
+        self.logger = logging.getLogger(__name__)
+        
     def process_frame(self, frame: np.ndarray, frame_id: int, debug_mode: bool = False) -> Dict:
         """
         Process a single frame to track players.
@@ -100,92 +105,54 @@ class PlayerTracker:
         
         # Step 1: Process through segmentation model if available
         if self.segmentation_processor:
-            segmentation_features = self.segmentation_processor.process_frame(
+            segmentation_result = self.segmentation_processor.process_frame(
                 frame, frame_id, self.output_dir
             )
-            frame_data["segmentation_features"] = segmentation_features
+            frame_data["segmentation_features"] = segmentation_result
             
-            # Step 2: Calculate homography if rink coordinates are available
+            # Calculate homography if we have a homography calculator
             if self.homography_calculator:
-                success, homography_matrix, debug_info = (
-                    self.homography_calculator.calculate_homography(
-                        segmentation_features["features"]
-                    )
-                )
-                frame_data["homography_success"] = success
-                frame_data["homography_debug_info"] = debug_info
-                
-                if success and homography_matrix is not None:
-                    frame_data["homography_matrix"] = homography_matrix
-                    # Store successful homography matrix in cache
-                    self.homography_calculator.homography_cache[frame_id] = homography_matrix
-                    print(f"Homography calculation successful for frame {frame_id}")
-                else:
-                    # Try to get interpolated matrix for this frame
-                    interpolated_matrix = self.homography_calculator.get_homography_matrix(frame_id)
-                    if interpolated_matrix is not None:
-                        frame_data["homography_matrix"] = interpolated_matrix
-                        frame_data["homography_success"] = True
-                        frame_data["homography_debug_info"] = {"reason": "interpolated"}
-                        print(f"Using interpolated homography for frame {frame_id}")
-                    else:
-                        print(
-                            f"Homography calculation failed for frame {frame_id}: "
-                            f"{debug_info.get('reason_for_failure', 'unknown')}"
-                        )
-        
-        # Step 3: Detect players
-        player_detections = self.player_detector.process_frame(frame, frame_id)
-        
-        # Step 4: Get player crops for orientation detection
-        player_crops = self.player_detector.get_player_crops(frame, player_detections)
-        
-        # Step 5: Detect player orientations
-        player_orientations = self.orientation_detector.process_player_crops(player_crops)
-        
-        # Step 6: Map player positions to the rink and compile data
-        for i, detection in enumerate(player_detections):
-            player_data = {
-                "player_id": f"player_{frame_id}_{i}",  # Temporary ID
-                "type": detection["class"],
-                "confidence": detection["confidence"],
-                "bbox": detection["bbox"],
-                "reference_point": {
-                    "x": detection["reference_point"]["x"],
-                    "y": detection["reference_point"]["y"],
-                    "pixel_x": detection["reference_point"]["pixel_x"],
-                    "pixel_y": detection["reference_point"]["pixel_y"]
-                }
-            }
-            
-            # Add orientation if available
-            if i in player_orientations:
-                player_data["orientation"] = player_orientations[i]["orientation"]
-                player_data["orientation_confidence"] = player_orientations[i]["confidence"]
-            
-            # Map position to rink if homography is available
-            if self.homography_calculator and frame_data.get("homography_success") and "homography_matrix" in frame_data:
                 try:
-                    # Extract reference point coordinates
-                    ref_point = [(float(detection["reference_point"]["x"]), float(detection["reference_point"]["y"]))]
-                    
-                    # Transform reference point to rink coordinates
-                    rink_positions = self.homography_calculator.apply_homography(ref_point, frame_data["homography_matrix"])
-                    
-                    if rink_positions:  # Check if we got any positions back
-                        player_data["rink_position"] = {
-                            "x": float(rink_positions[0][0]),  # Ensure coordinates are float
-                            "y": float(rink_positions[0][1]),
-                            "pixel_x": int(rink_positions[0][0]),  # Add pixel-space coordinates
-                            "pixel_y": int(rink_positions[0][1])
-                        }
+                    # Pass the features to the homography calculator
+                    homography_matrix = self.homography_calculator.calculate_homography(
+                        segmentation_result["features"]
+                    )
+                    if homography_matrix is not None:
+                        frame_data["homography_matrix"] = homography_matrix.tolist()
+                        frame_data["homography_success"] = True
+                    else:
+                        frame_data["homography_success"] = False
                 except Exception as e:
-                    print(f"Error applying homography to player: {e}")
-            
-            frame_data["players"].append(player_data)
+                    self.logger.error(f"Error calculating homography: {e}")
+                    frame_data["homography_success"] = False
         
-        # Store frame data
-        self.tracking_data[frame_id] = frame_data
+        # Step 2: Detect players
+        if self.player_detector:
+            detections = self.player_detector.process_frame(frame, frame_id)
+            
+            # Step 3: Process each detection
+            for i, detection in enumerate(detections):
+                player_data = {
+                    "player_id": f"{frame_id}_{i}",  # Temporary ID
+                    "type": detection["class"],
+                    "bbox": detection["bbox"],
+                    "confidence": detection["confidence"],
+                    "reference_point": detection["reference_point"]
+                }
+                
+                # Project player position to rink coordinates if homography available
+                if frame_data.get("homography_success", False):
+                    try:
+                        rink_pos = self.homography_calculator.project_point_to_rink(
+                            (detection["reference_point"]["x"], detection["reference_point"]["y"]),
+                            frame_data["homography_matrix"]
+                        )
+                        if rink_pos:
+                            player_data["rink_position"] = rink_pos
+                    except Exception as e:
+                        self.logger.error(f"Error projecting point: {e}")
+                
+                frame_data["players"].append(player_data)
         
         return frame_data
     

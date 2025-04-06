@@ -348,8 +348,8 @@ def create_quadview(
                 # Scale coordinates to visualization size
                 scale_x = quadview_w / broadcast_frame.shape[1]
                 scale_y = quadview_h / broadcast_frame.shape[0]
-                x = int(pos["pixel_x"] * scale_x)
-                y = int(pos["pixel_y"] * scale_y)
+                x = int(pos["x"] * scale_x)
+                y = int(pos["y"] * scale_y)
                 
                 # Draw player marker (blue dot)
                 cv2.circle(detections_vis, (x, y), 4, (255, 0, 0), -1)
@@ -399,29 +399,30 @@ def create_quadview(
         for player in players:
             if "rink_position" in player:
                 pos = player["rink_position"]
-                # Scale coordinates to visualization size
-                scale_x = quadview_w / rink_img.shape[1]
-                scale_y = quadview_h / rink_img.shape[0]
-                x = int(pos["x"] * scale_x)
-                y = int(pos["y"] * scale_y)
-                
-                # Draw player marker (blue dot)
-                cv2.circle(clean_rink_resized, (x, y), 4, (255, 0, 0), -1)
-                
-                # Add player ID and orientation if available
-                label = player.get("player_id", "")
-                if "orientation" in player:
-                    label += f" ({player['orientation']}°)"
-                if label:
-                    cv2.putText(
-                        clean_rink_resized,
-                        label,
-                        (x + 5, y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        (255, 0, 0),
-                        1
-                    )
+                if pos is not None:
+                    # Scale coordinates to visualization size
+                    scale_x = quadview_w / rink_img.shape[1]
+                    scale_y = quadview_h / rink_img.shape[0]
+                    x = int(pos["x"] * scale_x)
+                    y = int(pos["y"] * scale_y)
+                    
+                    # Draw player marker (blue dot)
+                    cv2.circle(clean_rink_resized, (x, y), 4, (255, 0, 0), -1)
+                    
+                    # Add player ID and orientation if available
+                    label = player.get("player_id", "")
+                    if "orientation" in player:
+                        label += f" ({player['orientation']}°)"
+                    if label:
+                        cv2.putText(
+                            clean_rink_resized,
+                            label,
+                            (x + 5, y - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            (255, 0, 0),
+                            1
+                        )
     
     cv2.putText(
         clean_rink_resized,

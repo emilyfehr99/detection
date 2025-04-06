@@ -143,12 +143,19 @@ class HomographyCalculator:
         """
         source_points = {}
         
+        # Debug: Print raw segmentation features
+        self.logger.info(
+            f"Raw segmentation features: {json.dumps(segmentation_features, indent=2)}"
+        )
+        
         # First identify the center line as our primary reference
         center_line_x = None
         if "RedCenterLine" in segmentation_features and segmentation_features["RedCenterLine"]:
+            self.logger.info("Found RedCenterLine features")
             center_lines = segmentation_features["RedCenterLine"]
             for cl in center_lines:
                 if "points" not in cl or not cl["points"]:
+                    self.logger.warning("RedCenterLine feature missing points")
                     continue
                 points = cl["points"]
                 try:
@@ -170,11 +177,14 @@ class HomographyCalculator:
         
         # Process blue lines using center line as reference
         if "BlueLine" in segmentation_features and segmentation_features["BlueLine"]:
+            self.logger.info("Found BlueLine features")
             for bl in segmentation_features["BlueLine"]:
                 if "points" not in bl or not bl["points"]:
+                    self.logger.warning("BlueLine feature missing points")
                     continue
                 points = bl["points"]
                 if len(points) < 2:
+                    self.logger.warning("BlueLine feature has less than 2 points")
                     continue
                 
                 # Get top and bottom points
@@ -187,34 +197,52 @@ class HomographyCalculator:
                 
                 # Calculate average x position of the blue line
                 avg_x = (top_point[0] + bottom_point[0]) / 2
+                self.logger.info(
+                    f"BlueLine avg_x: {avg_x}, center_line_x: {center_line_x}"
+                )
                 
                 # If we have a center line reference, use it to determine left/right
                 if center_line_x:
                     if avg_x > center_line_x:
                         source_points["blue_line_right_top"] = top_point
                         source_points["blue_line_right_bottom"] = bottom_point
-                        self.logger.info(f"Added right blue line at x={avg_x} (right of center)")
+                        self.logger.info(
+                            f"Added right blue line at x={avg_x} (right of center)"
+                        )
                     else:
                         source_points["blue_line_left_top"] = top_point
                         source_points["blue_line_left_bottom"] = bottom_point
-                        self.logger.info(f"Added left blue line at x={avg_x} (left of center)")
+                        self.logger.info(
+                            f"Added left blue line at x={avg_x} (left of center)"
+                        )
                 else:
                     # If no center line, use frame center but be more conservative
                     frame_center = self.broadcast_width / 2
-                    if abs(avg_x - frame_center) > self.broadcast_width / 4:  # Only classify if significantly off center
+                    self.logger.info(f"No center line, using frame center {frame_center}")
+                    # Only classify if significantly off center
+                    if abs(avg_x - frame_center) > self.broadcast_width / 4:
                         if avg_x > frame_center:
                             source_points["blue_line_right_top"] = top_point
                             source_points["blue_line_right_bottom"] = bottom_point
-                            self.logger.info(f"Added right blue line at x={avg_x} (using frame center)")
+                            self.logger.info(
+                                f"Added right blue line at x={avg_x} (using frame center)"
+                            )
                         else:
                             source_points["blue_line_left_top"] = top_point
                             source_points["blue_line_left_bottom"] = bottom_point
-                            self.logger.info(f"Added left blue line at x={avg_x} (using frame center)")
+                            self.logger.info(
+                                f"Added left blue line at x={avg_x} (using frame center)"
+                            )
+                    else:
+                        msg = f"BlueLine at x={avg_x} not far enough from frame center {frame_center}"
+                        self.logger.warning(msg)
         
         # Process faceoff circles using center line as reference
         if "FaceoffCircle" in segmentation_features and segmentation_features["FaceoffCircle"]:
+            self.logger.info("Found FaceoffCircle features")
             for fc in segmentation_features["FaceoffCircle"]:
                 if "points" not in fc or not fc["points"]:
+                    self.logger.warning("FaceoffCircle feature missing points")
                     continue
                 points = fc["points"]
                 try:
@@ -231,21 +259,34 @@ class HomographyCalculator:
                             # Right side faceoff circle
                             if y < self.broadcast_height / 2:
                                 source_points["faceoff_circle_1"] = (x, y)  # top right
-                                self.logger.info(f"Added top right faceoff circle at ({x}, {y})")
+                                self.logger.info(
+                                    f"Added top right faceoff circle at ({x}, {y})"
+                                )
                             else:
                                 source_points["faceoff_circle_3"] = (x, y)  # bottom right
-                                self.logger.info(f"Added bottom right faceoff circle at ({x}, {y})")
+                                self.logger.info(
+                                    f"Added bottom right faceoff circle at ({x}, {y})"
+                                )
                         else:
                             # Left side faceoff circle
                             if y < self.broadcast_height / 2:
                                 source_points["faceoff_circle_0"] = (x, y)  # top left
-                                self.logger.info(f"Added top left faceoff circle at ({x}, {y})")
+                                self.logger.info(
+                                    f"Added top left faceoff circle at ({x}, {y})"
+                                )
                             else:
                                 source_points["faceoff_circle_2"] = (x, y)  # bottom left
-                                self.logger.info(f"Added bottom left faceoff circle at ({x}, {y})")
+                                self.logger.info(
+                                    f"Added bottom left faceoff circle at ({x}, {y})"
+                                )
                 except (IndexError, KeyError, ValueError) as e:
                     self.logger.warning(f"Error processing faceoff circle points: {e}")
                     continue
+        
+        # Log summary of found points
+        self.logger.info(f"Found {len(source_points)} source points:")
+        for name, point in source_points.items():
+            self.logger.info(f"  {name}: {point}")
         
         return source_points
     
@@ -272,129 +313,88 @@ class HomographyCalculator:
         weight = min(ratio, 1/ratio)
         return weight
 
-    def calculate_homography(self, segmentation_features):
+    def calculate_homography(
+        self, 
+        segmentation_features: Dict[str, List[Dict]]
+    ) -> Optional[np.ndarray]:
         """
-        Calculate homography matrix between broadcast footage and 2D rink.
+        Calculate homography matrix from segmentation features.
         
         Args:
-            segmentation_features: Dictionary containing segmentation results
+            segmentation_features: Dictionary of segmentation features
             
         Returns:
-            Tuple of (success, homography_matrix, debug_info)
+            Homography matrix if successful, None otherwise
         """
-        # Extract features from segmentation results
-        features = segmentation_features.get("features", {})
-        
         # Extract source points from segmentation features
-        source_points = self.extract_source_points(features)
+        source_points = self.extract_source_points(segmentation_features)
         
-        # Get destination points from rink coordinates
+        # Log available source points
+        self.logger.info(
+            f"Available source points: {list(source_points.keys())}"
+        )
+        
+        # Get destination points
         dest_points = self.get_destination_points()
         
-        # Find common points between source and destination
-        common_points = {}
-        for name, point in source_points.items():
-            if name in dest_points:
-                common_points[name] = (point, dest_points[name])
-                self.logger.info(f"Matched point {name}: source={point}, dest={dest_points[name]}")
-            else:
-                self.logger.warning(f"Could not find matching destination point for {name}")
+        # Log available destination points
+        self.logger.info(
+            f"Available destination points: {list(dest_points.keys())}"
+        )
+        
+        # Log BlueLine features for debugging
+        if "BlueLine" in segmentation_features:
+            self.logger.info(
+                f"BlueLine features: {json.dumps(segmentation_features['BlueLine'])}"
+            )
         
         # Need at least 4 points for homography
-        if len(common_points) < 4:
-            self.logger.warning(f"Insufficient points for homography: found {len(common_points)}, need 4")
-            self.logger.info(f"Available source points: {list(source_points.keys())}")
-            self.logger.info(f"Available destination points: {list(dest_points.keys())}")
-            return False, None, {
-                "reason_for_failure": "insufficient_points",
-                "points_found": len(common_points),
-                "required_points": 4,
-                "source_points": list(source_points.keys()),
-                "dest_points": list(dest_points.keys())
-            }
+        if len(source_points) < 4:
+            self.logger.warning(
+                f"Insufficient points for homography: "
+                f"found {len(source_points)}, need 4"
+            )
+            return None
         
-        # Convert points to numpy arrays for homography calculation
-        src_pts = []
-        dst_pts = []
-        point_names = []
+        # Get corresponding destination points
+        source_pts = []
+        dest_pts = []
         
-        for name, (src, dst) in common_points.items():
-            src_pts.append(src)
-            dst_pts.append(dst)
-            point_names.append(name)
-            self.logger.info(f"Using point {name} for homography: {src} -> {dst}")
+        for name, point in source_points.items():
+            if name in dest_points:
+                source_pts.append(point)
+                dest_pts.append(dest_points[name])
         
-        src_pts = np.float32(src_pts)
-        dst_pts = np.float32(dst_pts)
+        # Need at least 4 matching points
+        if len(source_pts) < 4:
+            self.logger.warning(
+                f"Insufficient matching points: found {len(source_pts)}, need 4"
+            )
+            return None
         
-        # Use equal weights for all points
-        weights = np.ones(len(src_pts))
-        weights = weights / np.sum(weights)  # Normalize weights
+        # Convert to numpy arrays
+        source_pts = np.array(source_pts, dtype=np.float32)
+        dest_pts = np.array(dest_pts, dtype=np.float32)
         
-        # Try multiple RANSAC thresholds
-        ransac_thresholds = [3.0, 5.0, 8.0]  # Start with stricter threshold
-        best_h_matrix = None
-        best_inliers = 0
-        best_threshold = None
-        
-        for threshold in ransac_thresholds:
-            h_matrix, mask = cv2.findHomography(
-                src_pts, dst_pts, 
-                method=cv2.RANSAC,
-                ransacReprojThreshold=threshold,
-                maxIters=2000,
-                confidence=0.995
+        try:
+            # Calculate homography matrix using RANSAC
+            matrix, mask = cv2.findHomography(
+                source_pts, dest_pts, cv2.RANSAC, 5.0
             )
             
-            if h_matrix is not None:
-                inliers = np.sum(mask)
-                if inliers > best_inliers:
-                    best_h_matrix = h_matrix
-                    best_inliers = inliers
-                    best_threshold = threshold
-                    
-                    # Log which points were considered inliers
-                    for i, is_inlier in enumerate(mask):
-                        status = "inlier" if is_inlier else "outlier"
-                        self.logger.info(f"Point {point_names[i]} is {status}")
-        
-        if best_h_matrix is None:
-            self.logger.error("RANSAC failed to find homography matrix")
-            return False, None, {
-                "reason_for_failure": "ransac_failed",
-                "points_attempted": len(common_points)
-            }
-        
-        # Validate the homography
-        if not self.validate_homography(best_h_matrix):
-            self.logger.error("Homography validation failed")
-            # Test transform a few key points to see what's wrong
-            test_points = [(0, 0), (self.broadcast_width, 0), 
-                          (self.broadcast_width, self.broadcast_height), 
-                          (0, self.broadcast_height)]
-            transformed_points = cv2.perspectiveTransform(
-                np.float32(test_points).reshape(-1, 1, 2), 
-                best_h_matrix
-            ).reshape(-1, 2)
-            self.logger.info("Transformed corner points:")
-            for src, dst in zip(test_points, transformed_points):
-                self.logger.info(f"{src} -> {dst}")
+            # Convert matrix to numpy array if it's not already
+            if not isinstance(matrix, np.ndarray):
+                matrix = np.array(matrix, dtype=np.float32)
             
-            return False, None, {
-                "reason_for_failure": "validation_failed",
-                "ransac_threshold": best_threshold,
-                "inliers": best_inliers
-            }
-        
-        return True, best_h_matrix, {
-            "source_points": source_points,
-            "destination_points": dest_points,
-            "common_point_names": point_names,
-            "point_weights": weights.tolist(),
-            "ransac_threshold": best_threshold,
-            "inliers": best_inliers,
-            "total_points": len(common_points)
-        }
+            # Validate the homography matrix
+            if not self.validate_homography(matrix):
+                return None
+            
+            return matrix
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating homography: {str(e)}")
+            return None
 
     def _calculate_feature_weights(self, common_points, segmentation_features):
         """
@@ -448,10 +448,14 @@ class HomographyCalculator:
             Boolean indicating if homography is valid
         """
         if h_matrix is None:
+            self.logger.error("Homography matrix is None")
             return False
         
         # Check if matrix is well-formed
         if not isinstance(h_matrix, np.ndarray) or h_matrix.shape != (3, 3):
+            shape_info = (h_matrix.shape if isinstance(h_matrix, np.ndarray) 
+                         else type(h_matrix))
+            self.logger.error(f"Invalid matrix shape: {shape_info}")
             return False
         
         # Check corner bounds
@@ -471,31 +475,60 @@ class HomographyCalculator:
         rink_width = self.rink_width
         rink_height = self.rink_height
         
-        margin = 0.5  # Allow 50% margin outside rink bounds
+        # Increase margin to allow for more extreme perspectives
+        margin = 1.0  # Allow 100% margin outside rink bounds
         min_x = -rink_width * margin
         max_x = rink_width * (1 + margin)
         min_y = -rink_height * margin
         max_y = rink_height * (1 + margin)
         
-        for corner in transformed_corners:
+        # Log corner positions
+        self.logger.info("Transformed corner positions:")
+        for i, corner in enumerate(transformed_corners):
+            self.logger.info(
+                f"Corner {i}: ({corner[0]:.1f}, {corner[1]:.1f})"
+            )
+            self.logger.info(
+                f"Bounds: x=[{min_x:.1f}, {max_x:.1f}], "
+                f"y=[{min_y:.1f}, {max_y:.1f}]"
+            )
             if not (min_x <= corner[0] <= max_x and min_y <= corner[1] <= max_y):
+                self.logger.error(f"Corner {i} is out of bounds")
                 return False
         
-        # Check area ratio
+        # Check area ratio with more lenient bounds
         original_area = self.broadcast_width * self.broadcast_height
         transformed_area = cv2.contourArea(transformed_corners)
         area_ratio = transformed_area / original_area
         
-        if not (0.05 <= area_ratio <= 20.0):  # Allow for more significant perspective changes
+        # Allow for more extreme area changes
+        min_area_ratio = 0.01  # Allow much smaller projected area
+        max_area_ratio = 50.0  # Allow much larger projected area
+        
+        self.logger.info(
+            f"Area ratio: {area_ratio:.3f} "
+            f"(should be between {min_area_ratio} and {max_area_ratio})"
+        )
+        if not (min_area_ratio <= area_ratio <= max_area_ratio):
+            self.logger.error(f"Invalid area ratio: {area_ratio:.3f}")
             return False
         
-        # Check diagonal ratio
+        # Check diagonal ratio with more lenient bounds
         original_diag = np.sqrt(self.broadcast_width**2 + self.broadcast_height**2)
         transformed_diag1 = np.linalg.norm(transformed_corners[1] - transformed_corners[3])
         transformed_diag2 = np.linalg.norm(transformed_corners[0] - transformed_corners[2])
         diag_ratio = max(transformed_diag1, transformed_diag2) / original_diag
         
-        if not (0.1 <= diag_ratio <= 10.0):  # Allow for more significant perspective changes
+        # Allow for more extreme diagonal changes
+        min_diag_ratio = 0.05  # Allow much smaller diagonals
+        max_diag_ratio = 20.0  # Allow much larger diagonals
+        
+        self.logger.info(
+            f"Diagonal ratio: {diag_ratio:.3f} "
+            f"(should be between {min_diag_ratio} and {max_diag_ratio})"
+        )
+        if not (min_diag_ratio <= diag_ratio <= max_diag_ratio):
+            self.logger.error(f"Invalid diagonal ratio: {diag_ratio:.3f}")
             return False
         
         return True
@@ -889,3 +922,59 @@ class HomographyCalculator:
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
         
         return vis_frame
+
+    def project_point_to_rink(
+        self, 
+        point: Tuple[float, float], 
+        homography_matrix: np.ndarray
+    ) -> Optional[Dict[str, float]]:
+        """
+        Project a point from broadcast coordinates to rink coordinates.
+        
+        Args:
+            point: Tuple of (x, y) coordinates in broadcast frame
+            homography_matrix: Homography matrix to use for projection
+            
+        Returns:
+            Dictionary with x, y coordinates in rink space if successful, None otherwise
+        """
+        try:
+            # Convert homography matrix to numpy array if it's a list
+            if isinstance(homography_matrix, list):
+                homography_matrix = np.array(homography_matrix, dtype=np.float32)
+            
+            # Convert point to homogeneous coordinates
+            pt = np.array([[point[0], point[1], 1]], dtype=np.float32)
+            
+            # Project point using homography matrix
+            projected = homography_matrix.dot(pt.T)
+            
+            # Convert back from homogeneous coordinates
+            x = float(projected[0] / projected[2])
+            y = float(projected[1] / projected[2])
+            
+            # Check if point is within rink bounds with margin
+            margin = 0.2  # 20% margin
+            min_x = -self.rink_width * margin
+            max_x = self.rink_width * (1 + margin)
+            min_y = -self.rink_height * margin
+            max_y = self.rink_height * (1 + margin)
+            
+            if min_x <= x <= max_x and min_y <= y <= max_y:
+                # Convert to pixel coordinates (0 to rink_width/height)
+                pixel_x = int((x + self.rink_width * margin) * self.rink_width / (max_x - min_x))
+                pixel_y = int((y + self.rink_height * margin) * self.rink_height / (max_y - min_y))
+                
+                return {
+                    "x": x,
+                    "y": y,
+                    "pixel_x": pixel_x,
+                    "pixel_y": pixel_y
+                }
+            else:
+                self.logger.warning(f"Projected point ({x}, {y}) is outside rink bounds")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error projecting point: {str(e)}")
+            return None
