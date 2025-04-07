@@ -249,41 +249,35 @@ class SegmentationProcessor:
             
             # Filter and process contours
             min_area = 200
-            left_points = []
-            right_points = []
+            all_points = []  # Single list for all points
             
             # Process left contours
             for contour in left_contours:
                 if cv2.contourArea(contour) > min_area:
                     contour_points = contour.reshape(-1, 2)
-                    sorted_points = sorted(contour_points, key=lambda p: p[1])
-                    if len(sorted_points) > 0:
-                        top_point = sorted_points[0]
-                        bottom_point = sorted_points[-1]
-                        left_points.extend([
-                            {"x": int(top_point[0]), "y": int(top_point[1])},
-                            {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
-                        ])
+                    all_points.extend(contour_points)
             
             # Process right contours
             for contour in right_contours:
                 if cv2.contourArea(contour) > min_area:
                     contour_points = contour.reshape(-1, 2)
-                    sorted_points = sorted(contour_points, key=lambda p: p[1])
-                    if len(sorted_points) > 0:
-                        top_point = sorted_points[0]
-                        bottom_point = sorted_points[-1]
-                        right_points.extend([
-                            {"x": int(top_point[0]), "y": int(top_point[1])},
-                            {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
-                        ])
+                    all_points.extend(contour_points)
             
-            # Return separate features for left and right blue lines
+            # Return a single feature for the blue line
             features = []
-            if left_points:
-                features.append({'points': left_points})
-            if right_points:
-                features.append({'points': right_points})
+            if all_points:
+                # Convert to numpy array for easier manipulation
+                all_points = np.array(all_points)
+                # Sort by y-coordinate to find true endpoints
+                sorted_by_y = all_points[np.argsort(all_points[:, 1])]
+                top_point = sorted_by_y[0]
+                bottom_point = sorted_by_y[-1]
+                features.append({
+                    'points': [
+                        {"x": int(top_point[0]), "y": int(top_point[1])},
+                        {"x": int(bottom_point[0]), "y": int(bottom_point[1])}
+                    ]
+                })
             return features
         
         # For other line types, use the original logic
