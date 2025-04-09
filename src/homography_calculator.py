@@ -111,10 +111,10 @@ class HomographyCalculator:
         if faceoff_circles:
             # Create a mapping for positions to indices to ensure consistent numbering
             position_to_index = {
-                "top_left": 0,
-                "top_right": 1, 
-                "bottom_left": 2,
-                "bottom_right": 3,
+                "left_top": 0,
+                "right_top": 1, 
+                "left_bottom": 2,
+                "right_bottom": 3,
                 "center_left": 4,
                 "center_right": 5,
             }
@@ -407,6 +407,15 @@ class HomographyCalculator:
             matrix, mask = cv2.findHomography(
                 source_pts, dest_pts, cv2.RANSAC, 5.0
             )
+
+            # Log RANSAC results
+            self.logger.info("RANSAC Results:")
+            self.logger.info(f"Number of points: {len(source_pts)}")
+            self.logger.info("Point correspondences and inlier status:")
+            for i, ((sx, sy), (dx, dy), m) in enumerate(zip(source_pts, dest_pts, mask)):
+                inlier_status = "INLIER" if m == 1 else "OUTLIER"
+                self.logger.info(f"Point {i}: Source({sx:.1f}, {sy:.1f}) -> Dest({dx:.1f}, {dy:.1f}) - {inlier_status}")
+            self.logger.info(f"Total inliers: {np.sum(mask)}/{len(mask)}")
             
             # Convert matrix to numpy array if it's not already
             if not isinstance(matrix, np.ndarray):
