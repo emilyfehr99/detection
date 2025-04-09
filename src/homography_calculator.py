@@ -148,140 +148,166 @@ class HomographyCalculator:
             f"Raw segmentation features: {json.dumps(segmentation_features, indent=2)}"
         )
         
-        # First identify the center line as our primary reference
+        # Track feature positions for relative positioning
+        goal_line_positions = []  # List of (x, points) tuples
+        faceoff_circle_positions = []  # List of (x, points) tuples
+        blue_line_positions = []  # List of (x, points) tuples
         center_line_x = None
-        if "RedCenterLine" in segmentation_features and segmentation_features["RedCenterLine"]:
-            self.logger.info("Found RedCenterLine features")
-            center_lines = segmentation_features["RedCenterLine"]
-            for cl in center_lines:
-                if "points" not in cl or not cl["points"]:
-                    self.logger.warning("RedCenterLine feature missing points")
-                    continue
-                points = cl["points"]
-                try:
+        
+        # First collect all feature positions
+        if "GoalLine" in segmentation_features:
+            for gl in segmentation_features["GoalLine"]:
+                if "points" in gl and gl["points"]:
+                    points = gl["points"]
                     if isinstance(points[0], dict):
-                        x_positions = [float(p["x"]) for p in points]
-                        y_positions = [float(p["y"]) for p in points]
+                        pts = [(float(p["x"]), float(p["y"])) for p in points]
                     else:
-                        x_positions = [float(p[0]) for p in points]
-                        y_positions = [float(p[1]) for p in points]
-                    center_line_x = sum(x_positions) / len(x_positions)
-                    # Add center line points
-                    source_points["center_line_top"] = (center_line_x, min(y_positions))
-                    source_points["center_line_bottom"] = (center_line_x, max(y_positions))
-                    self.logger.info(f"Found center line at x={center_line_x}")
-                    break
-                except (IndexError, KeyError, ValueError) as e:
-                    self.logger.warning(f"Error processing center line points: {e}")
-                    continue
+                        pts = [(float(p[0]), float(p[1])) for p in points]
+                    avg_x = sum(p[0] for p in pts) / len(pts)
+                    goal_line_positions.append((avg_x, pts))
         
-        # Process blue lines using center line as reference
-        if "BlueLine" in segmentation_features and segmentation_features["BlueLine"]:
-            self.logger.info("Found BlueLine features")
-            for bl in segmentation_features["BlueLine"]:
-                if "points" not in bl or not bl["points"]:
-                    self.logger.warning("BlueLine feature missing points")
-                    continue
-                points = bl["points"]
-                if len(points) < 2:
-                    self.logger.warning("BlueLine feature has less than 2 points")
-                    continue
-                
-                # Get top and bottom points
-                if isinstance(points[0], dict):
-                    top_point = (float(points[0]["x"]), float(points[0]["y"]))
-                    bottom_point = (float(points[-1]["x"]), float(points[-1]["y"]))
-                else:
-                    top_point = (float(points[0][0]), float(points[0][1]))
-                    bottom_point = (float(points[-1][0]), float(points[-1][1]))
-                
-                # Calculate average x position of the blue line
-                avg_x = (top_point[0] + bottom_point[0]) / 2
-                self.logger.info(
-                    f"BlueLine avg_x: {avg_x}, center_line_x: {center_line_x}"
-                )
-                
-                # If we have a center line reference, use it to determine left/right
-                if center_line_x:
-                    if avg_x > center_line_x:
-                        source_points["blue_line_right_top"] = top_point
-                        source_points["blue_line_right_bottom"] = bottom_point
-                        self.logger.info(
-                            f"Added right blue line at x={avg_x} (right of center)"
-                        )
-                    else:
-                        source_points["blue_line_left_top"] = top_point
-                        source_points["blue_line_left_bottom"] = bottom_point
-                        self.logger.info(
-                            f"Added left blue line at x={avg_x} (left of center)"
-                        )
-                else:
-                    # If no center line, use frame center but be more conservative
-                    frame_center = self.broadcast_width / 2
-                    self.logger.info(f"No center line, using frame center {frame_center}")
-                    # Only classify if significantly off center
-                    if abs(avg_x - frame_center) > self.broadcast_width / 4:
-                        if avg_x > frame_center:
-                            source_points["blue_line_right_top"] = top_point
-                            source_points["blue_line_right_bottom"] = bottom_point
-                            self.logger.info(
-                                f"Added right blue line at x={avg_x} (using frame center)"
-                            )
-                        else:
-                            source_points["blue_line_left_top"] = top_point
-                            source_points["blue_line_left_bottom"] = bottom_point
-                            self.logger.info(
-                                f"Added left blue line at x={avg_x} (using frame center)"
-                            )
-                    else:
-                        msg = f"BlueLine at x={avg_x} not far enough from frame center {frame_center}"
-                        self.logger.warning(msg)
-        
-        # Process faceoff circles using center line as reference
-        if "FaceoffCircle" in segmentation_features and segmentation_features["FaceoffCircle"]:
-            self.logger.info("Found FaceoffCircle features")
+        if "FaceoffCircle" in segmentation_features:
             for fc in segmentation_features["FaceoffCircle"]:
-                if "points" not in fc or not fc["points"]:
-                    self.logger.warning("FaceoffCircle feature missing points")
-                    continue
-                points = fc["points"]
-                try:
+                if "points" in fc and fc["points"]:
+                    points = fc["points"]
                     if isinstance(points[0], dict):
                         x = float(points[0]["x"])
                         y = float(points[0]["y"])
                     else:
                         x = float(points[0][0])
                         y = float(points[0][1])
-                    
-                    # If we have a center line reference
-                    if center_line_x:
-                        if x > center_line_x:
-                            # Right side faceoff circle
-                            if y < self.broadcast_height / 2:
-                                source_points["faceoff_circle_1"] = (x, y)  # top right
-                                self.logger.info(
-                                    f"Added top right faceoff circle at ({x}, {y})"
-                                )
-                            else:
-                                source_points["faceoff_circle_3"] = (x, y)  # bottom right
-                                self.logger.info(
-                                    f"Added bottom right faceoff circle at ({x}, {y})"
-                                )
-                        else:
-                            # Left side faceoff circle
-                            if y < self.broadcast_height / 2:
-                                source_points["faceoff_circle_0"] = (x, y)  # top left
-                                self.logger.info(
-                                    f"Added top left faceoff circle at ({x}, {y})"
-                                )
-                            else:
-                                source_points["faceoff_circle_2"] = (x, y)  # bottom left
-                                self.logger.info(
-                                    f"Added bottom left faceoff circle at ({x}, {y})"
-                                )
-                except (IndexError, KeyError, ValueError) as e:
-                    self.logger.warning(f"Error processing faceoff circle points: {e}")
-                    continue
+                    faceoff_circle_positions.append((x, [(x, y)]))
+                elif "center" in fc:
+                    x = float(fc["center"]["x"])
+                    y = float(fc["center"]["y"])
+                    faceoff_circle_positions.append((x, [(x, y)]))
+        
+        if "BlueLine" in segmentation_features:
+            for bl in segmentation_features["BlueLine"]:
+                if "points" in bl and bl["points"]:
+                    points = bl["points"]
+                    if isinstance(points[0], dict):
+                        pts = [(float(p["x"]), float(p["y"])) for p in points]
+                    else:
+                        pts = [(float(p[0]), float(p[1])) for p in points]
+                    avg_x = sum(p[0] for p in pts) / len(pts)
+                    blue_line_positions.append((avg_x, pts))
+        
+        if "RedCenterLine" in segmentation_features and segmentation_features["RedCenterLine"]:
+            for cl in segmentation_features["RedCenterLine"]:
+                if "points" in cl and cl["points"]:
+                    points = cl["points"]
+                    if isinstance(points[0], dict):
+                        x_positions = [float(p["x"]) for p in points]
+                    else:
+                        x_positions = [float(p[0]) for p in points]
+                    center_line_x = sum(x_positions) / len(x_positions)
+                    break
+        
+        # Now classify goal lines
+        left_goal_line = None
+        right_goal_line = None
+        for goal_x, goal_points in goal_line_positions:
+            # Check if this goal line is left of any faceoff circle
+            is_left_of_faceoff = any(goal_x < fc_x for fc_x, _ in faceoff_circle_positions)
+            # Check if this goal line is right of any faceoff circle
+            is_right_of_faceoff = any(goal_x > fc_x for fc_x, _ in faceoff_circle_positions)
+            
+            if is_left_of_faceoff and not is_right_of_faceoff:
+                left_goal_line = (goal_x, goal_points)
+                # Add to source points
+                source_points["goal_line_left_top"] = goal_points[0]
+                source_points["goal_line_left_bottom"] = goal_points[-1]
+                self.logger.info(f"Classified goal line at x={goal_x} as LEFT")
+            elif is_right_of_faceoff and not is_left_of_faceoff:
+                right_goal_line = (goal_x, goal_points)
+                # Add to source points
+                source_points["goal_line_right_top"] = goal_points[0]
+                source_points["goal_line_right_bottom"] = goal_points[-1]
+                self.logger.info(f"Classified goal line at x={goal_x} as RIGHT")
+        
+        # Classify faceoff circles
+        for fc_x, fc_points in faceoff_circle_positions:
+            is_left_circle = False
+            is_right_circle = False
+            
+            # Check relative to goal lines
+            if left_goal_line and fc_x > left_goal_line[0]:
+                is_left_circle = True
+            if right_goal_line and fc_x < right_goal_line[0]:
+                is_right_circle = True
+                
+            # Check relative to blue lines
+            for blue_x, _ in blue_line_positions:
+                if fc_x < blue_x:
+                    is_left_circle = True
+                if fc_x > blue_x:
+                    is_right_circle = True
+            
+            # Classify based on vertical position
+            y = fc_points[0][1]
+            if is_left_circle and not is_right_circle:
+                if y < self.broadcast_height / 2:
+                    source_points["faceoff_circle_0"] = fc_points[0]  # top left
+                    self.logger.info(f"Added top left faceoff circle at ({fc_x}, {y})")
+                else:
+                    source_points["faceoff_circle_2"] = fc_points[0]  # bottom left
+                    self.logger.info(f"Added bottom left faceoff circle at ({fc_x}, {y})")
+            elif is_right_circle and not is_left_circle:
+                if y < self.broadcast_height / 2:
+                    source_points["faceoff_circle_1"] = fc_points[0]  # top right
+                    self.logger.info(f"Added top right faceoff circle at ({fc_x}, {y})")
+                else:
+                    source_points["faceoff_circle_3"] = fc_points[0]  # bottom right
+                    self.logger.info(f"Added bottom right faceoff circle at ({fc_x}, {y})")
+        
+        # Classify blue lines
+        for blue_x, blue_points in blue_line_positions:
+            is_left_blue = False
+            is_right_blue = False
+            
+            # Check relative to center line if available
+            if center_line_x:
+                if blue_x < center_line_x:
+                    is_left_blue = True
+                else:
+                    is_right_blue = True
+            
+            # Check relative to faceoff circles and goal lines
+            if left_goal_line and blue_x > left_goal_line[0]:
+                is_left_blue = True
+            if right_goal_line and blue_x < right_goal_line[0]:
+                is_right_blue = True
+                
+            for fc_x, _ in faceoff_circle_positions:
+                if blue_x > fc_x:
+                    is_left_blue = True
+                if blue_x < fc_x:
+                    is_right_blue = True
+            
+            # Classify based on strongest evidence
+            if is_left_blue and not is_right_blue:
+                source_points["blue_line_left_top"] = blue_points[0]
+                source_points["blue_line_left_bottom"] = blue_points[-1]
+                self.logger.info(f"Classified blue line at x={blue_x} as LEFT")
+            elif is_right_blue and not is_left_blue:
+                source_points["blue_line_right_top"] = blue_points[0]
+                source_points["blue_line_right_bottom"] = blue_points[-1]
+                self.logger.info(f"Classified blue line at x={blue_x} as RIGHT")
+        
+        # Add center line points if available
+        if center_line_x is not None:
+            for cl in segmentation_features["RedCenterLine"]:
+                if "points" in cl and cl["points"]:
+                    points = cl["points"]
+                    if isinstance(points[0], dict):
+                        pts = [(float(p["x"]), float(p["y"])) for p in points]
+                    else:
+                        pts = [(float(p[0]), float(p[1])) for p in points]
+                    source_points["center_line_top"] = pts[0]
+                    source_points["center_line_bottom"] = pts[-1]
+                    self.logger.info(f"Added center line points at x={center_line_x}")
+                    break
         
         # Log summary of found points
         self.logger.info(f"Found {len(source_points)} source points:")
