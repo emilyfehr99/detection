@@ -36,6 +36,12 @@ class HomographyCalculator:
         # Cache for homography matrices
         self.homography_cache = {}
         
+        # Cache for destination points (per frame)
+        self.destination_points_cache = {}
+        
+        # Base destination points from rink coordinates
+        self.base_destination_points = self._get_base_destination_points()
+        
         # For homography smoothing
         self.recent_matrices = deque(maxlen=10)  # Store recent valid matrices
         self.last_valid_matrix = None  # Store the last valid matrix
@@ -67,9 +73,9 @@ class HomographyCalculator:
             
         return rink_coordinates
     
-    def get_destination_points(self) -> Dict[str, Tuple[float, float]]:
+    def _get_base_destination_points(self) -> Dict[str, Tuple[float, float]]:
         """
-        Get destination points in the 2D rink model.
+        Get base destination points from the rink coordinates.
         
         Returns:
             Dictionary mapping point names to coordinates
@@ -130,6 +136,97 @@ class HomographyCalculator:
                         dest_points[f"faceoff_circle_{idx}"] = (float(circle["center"]["x"]), float(circle["center"]["y"]))
         
         return dest_points
+    
+    def get_destination_points(self, frame_idx: int = None) -> Dict[str, Tuple[float, float]]:
+        """
+        Get destination points in the 2D rink model for a specific frame.
+        If frame_idx is provided, will attempt to retrieve or interpolate
+        frame-specific destination points.
+        
+        Args:
+            frame_idx: Optional frame index
+            
+        Returns:
+            Dictionary mapping point names to coordinates
+        """
+        # If no frame_idx is provided or no cached points exist,
+        # return the base destination points
+        if frame_idx is None:
+            return self.base_destination_points.copy()
+            
+        # If we have cached destination points for this frame, return them
+        if frame_idx in self.destination_points_cache:
+            return self.destination_points_cache[frame_idx].copy()
+            
+        # If we don't have direct destination points, try to interpolate
+        valid_indices = sorted(self.destination_points_cache.keys())
+        if not valid_indices:
+            return self.base_destination_points.copy()
+            
+        # Find the closest indices before and after
+        before_idx = None
+        after_idx = None
+        
+        for idx in valid_indices:
+            if idx <= frame_idx:
+                before_idx = idx
+            if idx > frame_idx:
+                after_idx = idx
+                break
+        
+        # If we have both before and after destination points, interpolate
+        if before_idx is not None and after_idx is not None:
+            before_points = self.destination_points_cache[before_idx]
+            after_points = self.destination_points_cache[after_idx]
+            
+            # Calculate interpolation factor
+            frame_diff = after_idx - before_idx
+            if frame_diff == 0:
+                self.logger.warning("Before and after indices are the same for destination points, using before points")
+                interpolated_points = before_points.copy()
+            else:
+                # Calculate interpolation factor
+                t = (frame_idx - before_idx) / frame_diff
+                self.logger.info(f"Interpolating destination points with t={t:.3f}")
+                
+                # Interpolate each point
+                interpolated_points = {}
+                for key in before_points:
+                    if key in after_points:
+                        x1, y1 = before_points[key]
+                        x2, y2 = after_points[key]
+                        x = (1 - t) * x1 + t * x2
+                        y = (1 - t) * y1 + t * y2
+                        interpolated_points[key] = (x, y)
+                    else:
+                        # If point exists only in before_points, use that
+                        interpolated_points[key] = before_points[key]
+                
+                # Add points that exist only in after_points
+                for key in after_points:
+                    if key not in before_points:
+                        interpolated_points[key] = after_points[key]
+            
+            # Store the interpolated points for future reference
+            self.destination_points_cache[frame_idx] = interpolated_points
+            return interpolated_points.copy()
+        
+        # If we only have before points, use those
+        elif before_idx is not None:
+            self.logger.info(f"Using destination points from frame {before_idx} for frame {frame_idx}")
+            before_points = self.destination_points_cache[before_idx].copy()
+            self.destination_points_cache[frame_idx] = before_points
+            return before_points
+        
+        # If we only have after points, use those
+        elif after_idx is not None:
+            self.logger.info(f"Using destination points from frame {after_idx} for frame {frame_idx}")
+            after_points = self.destination_points_cache[after_idx].copy()
+            self.destination_points_cache[frame_idx] = after_points
+            return after_points
+        
+        # Fallback to base destination points
+        return self.base_destination_points.copy()
     
     def extract_source_points(self, segmentation_features: Dict[str, List[Dict]]) -> Dict[str, Tuple[float, float]]:
         """
@@ -339,6 +436,164 @@ class HomographyCalculator:
         weight = min(ratio, 1/ratio)
         return weight
 
+    def detect_camera_zone(self, segmentation_features: Dict[str, List[Dict]]) -> str:
+        """
+        Detect which zone the camera is focused on based on the detected features.
+        
+        Args:
+            segmentation_features: Dictionary of detected features
+            
+        Returns:
+            String indicating the camera zone: "left", "right", "center", or "unknown"
+        """
+        # Count features in different zones
+        left_features = 0
+        right_features = 0
+        center_features = 0
+        
+        # Check goal line positions
+        if "GoalLine" in segmentation_features:
+            for line in segmentation_features["GoalLine"]:
+                if "points" in line and line["points"]:
+                    # Calculate average x position
+                    if isinstance(line["points"][0], dict):
+                        x_positions = [p["x"] for p in line["points"]]
+                    else:
+                        x_positions = [p[0] for p in line["points"]]
+                    
+                    avg_x = sum(x_positions) / len(x_positions)
+                    
+                    # Determine if this is likely left or right goal line
+                    if avg_x < self.broadcast_width * 0.4:  # Left third of screen
+                        left_features += 2  # Weight goal lines more heavily
+                    elif avg_x > self.broadcast_width * 0.6:  # Right third of screen
+                        right_features += 2
+                    else:
+                        center_features += 1
+        
+        # Check faceoff circle positions
+        if "FaceoffCircle" in segmentation_features:
+            for circle in segmentation_features["FaceoffCircle"]:
+                if "center" in circle:
+                    x = float(circle["center"]["x"])
+                elif "points" in circle and circle["points"]:
+                    if isinstance(circle["points"][0], dict):
+                        x = float(circle["points"][0]["x"])
+                    else:
+                        x = float(circle["points"][0][0])
+                else:
+                    continue
+                
+                # Determine zone based on x position
+                if x < self.broadcast_width * 0.4:
+                    left_features += 1
+                elif x > self.broadcast_width * 0.6:
+                    right_features += 1
+                else:
+                    center_features += 1
+        
+        # Check blue line positions
+        if "BlueLine" in segmentation_features:
+            for line in segmentation_features["BlueLine"]:
+                if "points" in line and line["points"]:
+                    # Calculate average x position
+                    if isinstance(line["points"][0], dict):
+                        x_positions = [p["x"] for p in line["points"]]
+                    else:
+                        x_positions = [p[0] for p in line["points"]]
+                    
+                    avg_x = sum(x_positions) / len(x_positions)
+                    
+                    # Determine if this is likely left or right blue line
+                    if avg_x < self.broadcast_width * 0.45:
+                        left_features += 1
+                    elif avg_x > self.broadcast_width * 0.55:
+                        right_features += 1
+                    else:
+                        center_features += 1
+        
+        # Check center line position
+        if "RedCenterLine" in segmentation_features:
+            center_features += 2  # Weight center line heavily for center zone
+        
+        # Determine the most likely zone
+        if center_features > left_features and center_features > right_features:
+            return "center"
+        elif left_features > right_features:
+            return "left"
+        elif right_features > left_features:
+            return "right"
+        else:
+            return "unknown"
+    
+    def adjust_destination_points(self, zone: str, source_points: Dict[str, Tuple[float, float]]) -> Dict[str, Tuple[float, float]]:
+        """
+        Adjust destination points based on the detected camera zone.
+        
+        Args:
+            zone: Camera zone ("left", "right", "center", "unknown")
+            source_points: Source points detected in the frame
+            
+        Returns:
+            Adjusted destination points
+        """
+        dest_points = self.base_destination_points.copy()
+        
+        # No adjustment needed for center or unknown zones
+        if zone == "center" or zone == "unknown":
+            return dest_points
+        
+        # Analyze source points to determine visible area
+        left_x = self.broadcast_width
+        right_x = 0
+        for _, point in source_points.items():
+            x, _ = point
+            left_x = min(left_x, x)
+            right_x = max(right_x, x)
+        
+        # Default bounds if we couldn't determine from source points
+        if left_x == self.broadcast_width or right_x == 0:
+            left_x = 0
+            right_x = self.broadcast_width
+        
+        visible_width_ratio = (right_x - left_x) / self.broadcast_width
+        
+        # Adjust destination points based on zone
+        if zone == "left":
+            # For left zone, we want to focus more on the left half of the rink
+            dest_points_adj = {}
+            
+            # Adjust each destination point
+            for key, (x, y) in dest_points.items():
+                # If the point is in the right half, move it closer to center
+                if x > self.rink_width / 2:
+                    # Scale based on visible width
+                    new_x = self.rink_width / 2 + (x - self.rink_width / 2) * visible_width_ratio
+                    dest_points_adj[key] = (new_x, y)
+                else:
+                    dest_points_adj[key] = (x, y)
+            
+            return dest_points_adj
+            
+        elif zone == "right":
+            # For right zone, we want to focus more on the right half of the rink
+            dest_points_adj = {}
+            
+            # Adjust each destination point
+            for key, (x, y) in dest_points.items():
+                # If the point is in the left half, move it closer to center
+                if x < self.rink_width / 2:
+                    # Scale based on visible width
+                    new_x = self.rink_width / 2 - (self.rink_width / 2 - x) * visible_width_ratio
+                    dest_points_adj[key] = (new_x, y)
+                else:
+                    dest_points_adj[key] = (x, y)
+            
+            return dest_points_adj
+        
+        # Default return if no adjustments made
+        return dest_points
+
     def calculate_homography(
         self, 
         segmentation_features: Dict[str, List[Dict]],
@@ -362,8 +617,19 @@ class HomographyCalculator:
             f"Available source points: {list(source_points.keys())}"
         )
         
-        # Get destination points
-        dest_points = self.get_destination_points()
+        # Detect which zone the camera is in
+        camera_zone = self.detect_camera_zone(segmentation_features)
+        self.logger.info(f"Detected camera zone: {camera_zone}")
+        
+        # Adjust destination points based on camera zone
+        adjusted_dest_points = self.adjust_destination_points(camera_zone, source_points)
+        
+        # If we have a frame index, store the adjusted destination points
+        if frame_idx is not None:
+            self.destination_points_cache[frame_idx] = adjusted_dest_points
+        
+        # Get destination points - either adjusted or base points
+        dest_points = adjusted_dest_points
         
         # Log available destination points
         self.logger.info(
@@ -622,10 +888,17 @@ class HomographyCalculator:
         """
         Linearly interpolate between two homography matrices.
         
+        This performs true interpolation between two homography matrices, providing a 
+        smooth transition between different camera views. The interpolation creates
+        a weighted blend based on the temporal position between the two frames.
+        
         Args:
             matrix1: First homography matrix
             matrix2: Second homography matrix
-            t: Interpolation factor (0.0 to 1.0)
+            t: Interpolation factor (0.0 to 1.0) where:
+               - t=0.0 would return matrix1
+               - t=1.0 would return matrix2
+               - t=0.5 would return an equal blend of both matrices
             
         Returns:
             Interpolated homography matrix
@@ -644,6 +917,12 @@ class HomographyCalculator:
     def get_homography_matrix(self, frame_idx: int) -> Optional[np.ndarray]:
         """
         Get homography matrix for a specific frame, using interpolation if necessary.
+        
+        This function will:
+        1. Return exact matrix if it exists in cache
+        2. Try to find the nearest matrices before/after the requested frame
+        3. Interpolate between them if both exist
+        4. Use nearest if only one exists
         
         Args:
             frame_idx: Frame index
@@ -665,31 +944,39 @@ class HomographyCalculator:
         before_idx = None
         after_idx = None
         
-        for idx in valid_indices:
-            if idx <= frame_idx:
-                before_idx = idx
-            if idx > frame_idx:  # Changed from >= to > to fix edge case
-                after_idx = idx
-                break
+        # Find closest before index
+        before_indices = [idx for idx in valid_indices if idx <= frame_idx]
+        if before_indices:
+            before_idx = max(before_indices)
         
-        # Log the found indices
+        # Find closest after index
+        after_indices = [idx for idx in valid_indices if idx > frame_idx]
+        if after_indices:
+            after_idx = min(after_indices)
+        
+        # Log what we found
         self.logger.info(f"Looking for homography for frame {frame_idx}")
         self.logger.info(f"Found before_idx={before_idx}, after_idx={after_idx}")
+        
+        # Get destination points for this frame (which will be interpolated if needed)
+        # This line is commented out because we don't actually use dest_points
+        # but we keep it for debugging purposes
+        # dest_points = self.get_destination_points(frame_idx)
         
         # If we have both before and after matrices, interpolate
         if before_idx is not None and after_idx is not None:
             matrix1 = self.homography_cache[before_idx]
             matrix2 = self.homography_cache[after_idx]
             
-            # Check for division by zero (should not happen with fixed comparison)
+            # Check for division by zero
             frame_diff = after_idx - before_idx
             if frame_diff == 0:
                 self.logger.warning("Before and after indices are the same, using before matrix")
                 interpolated = matrix1
             else:
-                # Calculate interpolation factor
+                # Calculate true interpolation factor
                 t = (frame_idx - before_idx) / frame_diff
-                self.logger.info(f"Interpolating with t={t:.3f}")
+                self.logger.info(f"TRUE INTERPOLATION: t={t:.3f} between frames {before_idx} and {after_idx}")
                 
                 # Interpolate and cache the result
                 interpolated = self.interpolate_homography(matrix1, matrix2, t)

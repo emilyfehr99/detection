@@ -122,6 +122,7 @@ class PlayerTracker:
                     if homography_matrix is not None:
                         frame_data["homography_matrix"] = homography_matrix.tolist()
                         frame_data["homography_success"] = True
+                        frame_data["homography_source"] = "original"  # Mark as an original calculation
                     else:
                         # Try to get an interpolated matrix
                         homography_matrix = self.homography_calculator.get_homography_matrix(frame_id)
@@ -129,6 +130,7 @@ class PlayerTracker:
                             frame_data["homography_matrix"] = homography_matrix.tolist()
                             frame_data["homography_success"] = True
                             frame_data["homography_interpolated"] = True
+                            frame_data["homography_source"] = "fallback"  # Mark as a fallback, to be interpolated later
                         else:
                             frame_data["homography_success"] = False
                 except Exception as e:
@@ -525,71 +527,141 @@ class PlayerTracker:
         return results
     
     def interpolate_missing_homography(self, frame_results):
-        """Interpolate missing homography matrices for frames where calculation failed."""
-        # Collect frame indices with successful homography
-        successful_frames = {}
+        """Interpolate missing homography matrices for frames where calculation failed or used fallback."""
+        # Collect frame indices with successfully calculated homography (not fallback)
+        successful_original_frames = {}
         for i, frame_data in enumerate(frame_results):
-            if frame_data.get("homography_success", False):
-                successful_frames[frame_data["frame_idx"]] = i
+            # Only use frames with original homography as interpolation sources
+            if frame_data.get("homography_success", False) and frame_data.get("homography_source") == "original":
+                successful_original_frames[frame_data["frame_idx"]] = i
         
-        # Skip if we have less than 2 successful frames
-        if len(successful_frames) < 2:
-            self.logger.warning("Insufficient successful homography frames for interpolation")
+        # Skip if we have less than 2 original frames
+        if len(successful_original_frames) < 2:
+            self.logger.warning("Insufficient original homography frames for interpolation")
             return
         
-        # Get sorted list of frame indices with successful homography
-        sorted_indices = sorted(successful_frames.keys())
+        # Report initial state
+        self.logger.info(f"Starting true homography interpolation:")
+        self.logger.info(f"Found {len(successful_original_frames)} frames with original homography matrices")
         
-        # Interpolate for each frame without homography
+        # Count frames that need interpolation (fallback frames)
+        frames_needing_interpolation = []
         for i, frame_data in enumerate(frame_results):
-            frame_idx = frame_data["frame_idx"]
+            if frame_data.get("homography_source") == "fallback":
+                frames_needing_interpolation.append(frame_data["frame_idx"])
+        
+        self.logger.info(f"Need to interpolate {len(frames_needing_interpolation)} frames with fallback matrices")
+        
+        # Get sorted list of frame indices with original homography
+        sorted_indices = sorted(successful_original_frames.keys())
+        self.logger.info(f"Original homography frames: {sorted_indices}")
+        
+        # Get sorted list of frames needing interpolation
+        sorted_frames_to_interpolate = sorted(frames_needing_interpolation)
+        
+        # Do multiple passes to ensure all frames have a chance to be interpolated
+        for pass_num in range(3):  # Do three passes to ensure better results
+            self.logger.info(f"\nInterpolation pass {pass_num+1}")
+            frames_interpolated_this_pass = 0
             
-            # Skip frames that already have homography
-            if frame_data.get("homography_success", False):
-                continue
+            # Interpolate for each frame with fallback homography
+            for frame_idx in sorted_frames_to_interpolate[:]:  # Use a copy to safely modify the list
+                # Get the frame data
+                frame_idx_in_results = None
+                for i, frame_data in enumerate(frame_results):
+                    if frame_data["frame_idx"] == frame_idx:
+                        frame_idx_in_results = i
+                        break
+                
+                if frame_idx_in_results is None:
+                    continue
+                
+                frame_data = frame_results[frame_idx_in_results]
+                
+                # Skip if this frame is no longer a fallback (it was interpolated in a previous pass)
+                if frame_data.get("homography_source") != "fallback":
+                    sorted_frames_to_interpolate.remove(frame_idx)
+                    continue
+                
+                # Find the closest original frames before and after
+                before_idx = None
+                after_idx = None
+                
+                # Find closest before and after indices from original frames
+                before_indices = [idx for idx in sorted_indices if idx < frame_idx]
+                after_indices = [idx for idx in sorted_indices if idx > frame_idx]
+                
+                if before_indices:
+                    before_idx = max(before_indices)
+                
+                if after_indices:
+                    after_idx = min(after_indices)
+                
+                # Interpolate only if we have both before and after frames
+                if before_idx is not None and after_idx is not None:
+                    before_matrix = np.array(frame_results[successful_original_frames[before_idx]]["homography_matrix"])
+                    after_matrix = np.array(frame_results[successful_original_frames[after_idx]]["homography_matrix"])
+                    
+                    # Calculate interpolation factor
+                    t = (frame_idx - before_idx) / (after_idx - before_idx)
+                    
+                    # Use the homography calculator's interpolation method
+                    interpolated = self.homography_calculator.interpolate_homography(before_matrix, after_matrix, t)
+                    
+                    # Update the frame data
+                    frame_data["homography_matrix"] = interpolated.tolist()
+                    frame_data["homography_success"] = True
+                    frame_data["homography_source"] = "interpolated"  # Mark as properly interpolated
+                    frame_data["interpolation_details"] = {
+                        "method": "true_interpolation",
+                        "before_frame": before_idx,
+                        "after_frame": after_idx,
+                        "t_factor": t
+                    }
+                    
+                    # Remove this frame from the list of frames to interpolate
+                    sorted_frames_to_interpolate.remove(frame_idx)
+                    frames_interpolated_this_pass += 1
+                    
+                    self.logger.info(f"  Frame {frame_idx}: TRUE INTERPOLATION (t={t:.2f}, between frames {before_idx} and {after_idx})")
+                
+                # If we only have a before frame but no after frame, keep using the before frame
+                elif before_idx is not None:
+                    # We already have the before matrix, no need to change it
+                    # Just update the metadata to be clearer about what happened
+                    frame_data["interpolation_details"] = {
+                        "method": "before_fallback",
+                        "before_frame": before_idx,
+                        "note": "Kept existing fallback, no after frame available for interpolation"
+                    }
+                    
+                    sorted_frames_to_interpolate.remove(frame_idx)
+                    frames_interpolated_this_pass += 1
+                    self.logger.info(f"  Frame {frame_idx}: Kept fallback from frame {before_idx} (no after frame)")
+                
+                # If we only have an after frame but no before frame, use the after frame
+                elif after_idx is not None:
+                    after_matrix = np.array(frame_results[successful_original_frames[after_idx]]["homography_matrix"])
+                    frame_data["homography_matrix"] = after_matrix.tolist()
+                    frame_data["homography_source"] = "from_after"
+                    frame_data["interpolation_details"] = {
+                        "method": "after_fallback",
+                        "after_frame": after_idx,
+                        "note": "Used after frame instead of fallback, no before frame available"
+                    }
+                    
+                    sorted_frames_to_interpolate.remove(frame_idx)
+                    frames_interpolated_this_pass += 1
+                    self.logger.info(f"  Frame {frame_idx}: Using matrix from next frame {after_idx}")
             
-            # Find the closest successful frames before and after
-            before_idx = None
-            after_idx = None
+            # Update the number of successful frames after each pass
+            self.logger.info(f"Pass {pass_num+1} complete: Interpolated {frames_interpolated_this_pass} frames")
+            self.logger.info(f"Remaining frames to interpolate: {len(sorted_frames_to_interpolate)}")
             
-            for idx in sorted_indices:
-                if idx < frame_idx:
-                    before_idx = idx
-                elif idx > frame_idx:
-                    after_idx = idx
-                    break
-            
-            # Interpolate only if we have both before and after frames
-            if before_idx is not None and after_idx is not None:
-                before_matrix = np.array(frame_results[successful_frames[before_idx]]["homography_matrix"])
-                after_matrix = np.array(frame_results[successful_frames[after_idx]]["homography_matrix"])
-                
-                # Calculate interpolation factor
-                t = (frame_idx - before_idx) / (after_idx - before_idx)
-                
-                # Use the homography calculator's interpolation method
-                interpolated = self.homography_calculator.interpolate_homography(before_matrix, after_matrix, t)
-                
-                # Update the frame data
-                frame_data["homography_matrix"] = interpolated.tolist()
-                frame_data["homography_success"] = True
-                frame_data["interpolated_homography"] = True
-                
-                self.logger.info(f"Interpolated homography for frame {frame_idx} (t={t:.2f})")
-            # If we only have a before frame but no after frame, use the before frame
-            elif before_idx is not None:
-                before_matrix = np.array(frame_results[successful_frames[before_idx]]["homography_matrix"])
-                frame_data["homography_matrix"] = before_matrix.tolist()
-                frame_data["homography_success"] = True
-                frame_data["interpolated_homography"] = True
-                self.logger.info(f"Using previous homography for frame {frame_idx} (from frame {before_idx})")
-            # If we only have an after frame but no before frame, use the after frame
-            elif after_idx is not None:
-                after_matrix = np.array(frame_results[successful_frames[after_idx]]["homography_matrix"])
-                frame_data["homography_matrix"] = after_matrix.tolist()
-                frame_data["homography_success"] = True
-                frame_data["interpolated_homography"] = True
-                self.logger.info(f"Using next homography for frame {frame_idx} (from frame {after_idx})")
+            # If we didn't interpolate any frames in this pass, or all frames have been interpolated, break
+            if frames_interpolated_this_pass == 0 or len(sorted_frames_to_interpolate) == 0:
+                self.logger.info(f"No more frames to interpolate, ending interpolation passes")
+                break
     
     def create_visualization(self, results, output_dir):
         # Implementation of create_visualization method

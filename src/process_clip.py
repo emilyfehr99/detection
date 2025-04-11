@@ -132,6 +132,14 @@ def process_clip(
             if frame_data.get("homography_interpolated", False):
                 frame_info["homography_interpolated"] = True
             
+            # Include information about homography source
+            if "homography_source" in frame_data:
+                frame_info["homography_source"] = frame_data["homography_source"]
+            
+            # Include detailed interpolation info if available
+            if "interpolation_details" in frame_data:
+                frame_info["interpolation_details"] = frame_data["interpolation_details"]
+            
             # Only include homography matrix if successful
             if frame_data.get("homography_success", False):
                 frame_info["homography_matrix"] = frame_data.get("homography_matrix", None)
@@ -178,6 +186,11 @@ def process_clip(
     print(f"\nProcessing complete!")
     print(f"Processed {frames_processed} frames in {processing_time:.2f} seconds")
     print(f"Average frame rate: {frames_processed/processing_time:.2f} fps")
+    
+    # IMPROVED TWO-PASS INTERPOLATION:
+    # Now that we have all the frames processed, do a second pass to interpolate missing homography matrices
+    print("\nRunning two-pass homography interpolation...")
+    tracker.interpolate_missing_homography(processed_frames_info)
     
     # Save tracking data
     tracking_data = {
