@@ -295,7 +295,8 @@ def process_frame(frame_path, rink_image_path, rink_coordinates_path, output_pat
     
     # Try to calculate homography
     success, homography_matrix, debug_info = homography_calculator.calculate_homography(
-        segmentation_features
+        segmentation_features,
+        0  # Use 0 as placeholder frame index for debugging
     )
     
     if not success:

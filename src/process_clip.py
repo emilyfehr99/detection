@@ -115,6 +115,7 @@ def process_clip(
             # Save frame info
             frame_info = {
                 "frame_id": frame_idx,
+                "frame_idx": frame_idx,
                 "timestamp": (frame_idx - start_frame) / fps,
                 "players": [
                     {
@@ -126,6 +127,10 @@ def process_clip(
                 ],
                 "homography_success": frame_data.get("homography_success", False)
             }
+            
+            # Include information about whether homography was interpolated
+            if frame_data.get("homography_interpolated", False):
+                frame_info["homography_interpolated"] = True
             
             # Only include homography matrix if successful
             if frame_data.get("homography_success", False):

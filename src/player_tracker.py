@@ -5,6 +5,7 @@ import json
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime
 import logging
+import time
 
 from segmentation_processor import SegmentationProcessor
 from player_detector import PlayerDetector
@@ -115,13 +116,21 @@ class PlayerTracker:
                 try:
                     # Pass the features to the homography calculator
                     homography_matrix = self.homography_calculator.calculate_homography(
-                        segmentation_result["features"]
+                        segmentation_result["features"],
+                        frame_id  # Pass frame_id for caching
                     )
                     if homography_matrix is not None:
                         frame_data["homography_matrix"] = homography_matrix.tolist()
                         frame_data["homography_success"] = True
                     else:
-                        frame_data["homography_success"] = False
+                        # Try to get an interpolated matrix
+                        homography_matrix = self.homography_calculator.get_homography_matrix(frame_id)
+                        if homography_matrix is not None:
+                            frame_data["homography_matrix"] = homography_matrix.tolist()
+                            frame_data["homography_success"] = True
+                            frame_data["homography_interpolated"] = True
+                        else:
+                            frame_data["homography_success"] = False
                 except Exception as e:
                     self.logger.error(f"Error calculating homography: {e}")
                     frame_data["homography_success"] = False
@@ -325,3 +334,263 @@ class PlayerTracker:
         except Exception as e:
             print(f"Error saving tracking data: {str(e)}")
             return None
+
+    def track_players(self, frame, frame_idx, timestamp):
+        """Track players in a single frame."""
+        frame_data = {
+            "frame_idx": frame_idx,
+            "timestamp": timestamp,
+            "players": [],
+            "homography_success": False
+        }
+        
+        # Run segmentation if we have a segmentation processor
+        if self.segmentation_processor:
+            segmentation_result = self.segmentation_processor.process_frame(frame)
+            frame_data["segmentation_features"] = segmentation_result["features"]
+            
+            # Calculate homography if we have a homography calculator
+            if self.homography_calculator:
+                try:
+                    # Pass the features to the homography calculator
+                    homography_matrix = self.homography_calculator.calculate_homography(
+                        segmentation_result["features"],
+                        frame_idx  # Pass frame_idx for caching
+                    )
+                    if homography_matrix is not None:
+                        frame_data["homography_matrix"] = homography_matrix.tolist()
+                        frame_data["homography_success"] = True
+                    else:
+                        # Try to get an interpolated matrix
+                        homography_matrix = self.homography_calculator.get_homography_matrix(frame_idx)
+                        if homography_matrix is not None:
+                            frame_data["homography_matrix"] = homography_matrix.tolist()
+                            frame_data["homography_success"] = True
+                            frame_data["homography_interpolated"] = True
+                        else:
+                            frame_data["homography_success"] = False
+                except Exception as e:
+                    self.logger.error(f"Error calculating homography: {e}")
+                    frame_data["homography_success"] = False
+        
+        # Run player detection
+        detection_result = self.player_detector.detect_players(frame)
+        
+        # Extract player detections
+        players = []
+        for i, bbox in enumerate(detection_result["boxes"]):
+            x1, y1, x2, y2 = bbox
+            # Get class and confidence
+            class_id = detection_result["classes"][i]
+            confidence = detection_result["scores"][i]
+            
+            # Extract player orientation if orientation model is available
+            orientation = None
+            orientation_confidence = None
+            if self.player_orientation_estimator:
+                try:
+                    player_img = frame[int(y1):int(y2), int(x1):int(x2)]
+                    if player_img.size > 0:  # Ensure valid crop
+                        orient_result = self.player_orientation_estimator.estimate_orientation(player_img)
+                        orientation = orient_result["orientation"]
+                        orientation_confidence = orient_result["confidence"]
+                except Exception as e:
+                    self.logger.error(f"Error estimating player orientation: {e}")
+            
+            # Calculate player position on the rink if homography is available
+            rink_position = None
+            if frame_data.get("homography_success", False) and "homography_matrix" in frame_data:
+                try:
+                    # Use the center bottom point of the bounding box as the player's position
+                    player_x = (x1 + x2) / 2
+                    player_y = y2  # Bottom of the bounding box
+                    
+                    # Convert from list back to numpy array
+                    homography_matrix = np.array(frame_data["homography_matrix"])
+                    
+                    # Project the point to the rink coordinates
+                    rink_position = self.homography_calculator.project_point_to_rink(
+                        (player_x, player_y), 
+                        homography_matrix
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error projecting player position: {e}")
+            
+            player_data = {
+                "bbox": bbox.tolist(),
+                "class_id": int(class_id),
+                "confidence": float(confidence),
+                "orientation": orientation,
+                "orientation_confidence": orientation_confidence,
+                "rink_position": rink_position
+            }
+            
+            players.append(player_data)
+        
+        frame_data["players"] = players
+        return frame_data
+
+    def process_video_clip(self, video_path, start_second=0, num_seconds=5, frame_step=1, max_frames=None):
+        """Process a clip from a video file."""
+        results = []
+        
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                self.logger.error(f"Could not open video: {video_path}")
+                return {"error": f"Could not open video: {video_path}"}
+            
+            # Get video properties
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Calculate frame range
+            start_frame = int(start_second * fps)
+            if num_seconds > 0:
+                end_frame = int((start_second + num_seconds) * fps)
+            else:
+                end_frame = total_frames
+            
+            # Apply max_frames limit if provided
+            if max_frames is not None and (end_frame - start_frame) > max_frames:
+                end_frame = start_frame + max_frames
+            
+            # Set starting position
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            
+            frame_idx = start_frame
+            frames_dir = os.path.join(self.output_dir, "frames")
+            os.makedirs(frames_dir, exist_ok=True)
+            
+            frame_results = []
+            
+            # Process frames
+            while frame_idx < end_frame:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Process every n-th frame
+                if (frame_idx - start_frame) % frame_step == 0:
+                    timestamp = frame_idx / fps
+                    
+                    # Track players
+                    frame_data = self.track_players(frame, frame_idx, timestamp)
+                    frame_results.append(frame_data)
+                    
+                    # Save frame
+                    output_idx = (frame_idx - start_frame) // frame_step
+                    frame_path = os.path.join(frames_dir, f"frame_{output_idx}.jpg")
+                    cv2.imwrite(frame_path, frame)
+                    
+                    self.logger.info(f"Processed frame {frame_idx} (output idx: {output_idx})")
+                
+                frame_idx += 1
+                
+                # Check for early termination
+                if max_frames is not None and (frame_idx - start_frame) >= max_frames * frame_step:
+                    break
+            
+            # Now interpolate missing homography matrices
+            self.interpolate_missing_homography(frame_results)
+            
+            # Prepare final results
+            results = {
+                "video_info": {
+                    "path": video_path,
+                    "fps": fps,
+                    "total_frames": total_frames,
+                    "processed_frames": len(frame_results)
+                },
+                "frames": frame_results
+            }
+            
+            # Save results to file
+            output_file = os.path.join(self.output_dir, f"player_detection_data_{int(time.time())}.json")
+            with open(output_file, "w") as f:
+                json.dump(results, f, cls=NumpyEncoder, indent=2)
+            
+            self.logger.info(f"Results saved to {output_file}")
+            
+            # Create visualization HTML
+            self.create_visualization(results, self.output_dir)
+            
+        except Exception as e:
+            self.logger.error(f"Error processing video: {e}")
+            results = {"error": str(e)}
+        finally:
+            if 'cap' in locals() and cap is not None:
+                cap.release()
+        
+        return results
+    
+    def interpolate_missing_homography(self, frame_results):
+        """Interpolate missing homography matrices for frames where calculation failed."""
+        # Collect frame indices with successful homography
+        successful_frames = {}
+        for i, frame_data in enumerate(frame_results):
+            if frame_data.get("homography_success", False):
+                successful_frames[frame_data["frame_idx"]] = i
+        
+        # Skip if we have less than 2 successful frames
+        if len(successful_frames) < 2:
+            self.logger.warning("Insufficient successful homography frames for interpolation")
+            return
+        
+        # Get sorted list of frame indices with successful homography
+        sorted_indices = sorted(successful_frames.keys())
+        
+        # Interpolate for each frame without homography
+        for i, frame_data in enumerate(frame_results):
+            frame_idx = frame_data["frame_idx"]
+            
+            # Skip frames that already have homography
+            if frame_data.get("homography_success", False):
+                continue
+            
+            # Find the closest successful frames before and after
+            before_idx = None
+            after_idx = None
+            
+            for idx in sorted_indices:
+                if idx < frame_idx:
+                    before_idx = idx
+                elif idx > frame_idx:
+                    after_idx = idx
+                    break
+            
+            # Interpolate only if we have both before and after frames
+            if before_idx is not None and after_idx is not None:
+                before_matrix = np.array(frame_results[successful_frames[before_idx]]["homography_matrix"])
+                after_matrix = np.array(frame_results[successful_frames[after_idx]]["homography_matrix"])
+                
+                # Calculate interpolation factor
+                t = (frame_idx - before_idx) / (after_idx - before_idx)
+                
+                # Use the homography calculator's interpolation method
+                interpolated = self.homography_calculator.interpolate_homography(before_matrix, after_matrix, t)
+                
+                # Update the frame data
+                frame_data["homography_matrix"] = interpolated.tolist()
+                frame_data["homography_success"] = True
+                frame_data["interpolated_homography"] = True
+                
+                self.logger.info(f"Interpolated homography for frame {frame_idx} (t={t:.2f})")
+            # If we only have a before frame but no after frame, use the before frame
+            elif before_idx is not None:
+                before_matrix = np.array(frame_results[successful_frames[before_idx]]["homography_matrix"])
+                frame_data["homography_matrix"] = before_matrix.tolist()
+                frame_data["homography_success"] = True
+                frame_data["interpolated_homography"] = True
+                self.logger.info(f"Using previous homography for frame {frame_idx} (from frame {before_idx})")
+            # If we only have an after frame but no before frame, use the after frame
+            elif after_idx is not None:
+                after_matrix = np.array(frame_results[successful_frames[after_idx]]["homography_matrix"])
+                frame_data["homography_matrix"] = after_matrix.tolist()
+                frame_data["homography_success"] = True
+                frame_data["interpolated_homography"] = True
+                self.logger.info(f"Using next homography for frame {frame_idx} (from frame {after_idx})")
+    
+    def create_visualization(self, results, output_dir):
+        # Implementation of create_visualization method
+        pass

@@ -143,6 +143,10 @@ def process_frame(frame_path, frame_number, rink_image_path, rink_coordinates_pa
             logger.info(f"Homography validation result: {'VALID' if valid else 'INVALID'}")
             
             if valid:
+                # Store in homography cache for later retrieval/interpolation
+                homography_calculator.homography_cache[frame_number] = matrix
+                logger.info(f"Stored valid homography matrix for frame {frame_number} in cache")
+                
                 # Apply homography to create warped frame
                 rink_img = cv2.imread(rink_image_path)
                 if rink_img is None:
@@ -166,7 +170,34 @@ def process_frame(frame_path, frame_number, rink_image_path, rink_coordinates_pa
                     overlay_path = os.path.join(output_dir, f"frame_{frame_number}_overlay.jpg")
                     cv2.imwrite(overlay_path, overlay)
                     logger.info(f"Saved overlay to {overlay_path}")
-            
+            else:
+                logger.warning(f"Homography matrix for frame {frame_number} is invalid")
+                # Try to get an interpolated matrix
+                interpolated_matrix = homography_calculator.get_homography_matrix(frame_number)
+                if interpolated_matrix is not None:
+                    logger.info(f"Successfully interpolated matrix for frame {frame_number}")
+                    
+                    # Save warped frame with interpolated matrix
+                    rink_img = cv2.imread(rink_image_path)
+                    if rink_img is not None:
+                        warped_frame = cv2.warpPerspective(
+                            frame, interpolated_matrix, (rink_img.shape[1], rink_img.shape[0])
+                        )
+                        
+                        # Save warped frame
+                        output_path = os.path.join(output_dir, f"frame_{frame_number}_warped_interpolated.jpg")
+                        cv2.imwrite(output_path, warped_frame)
+                        logger.info(f"Saved interpolated warped frame to {output_path}")
+                        
+                        # Create overlay for visualization
+                        alpha = 0.5
+                        overlay = rink_img.copy()
+                        cv2.addWeighted(warped_frame, alpha, rink_img, 1-alpha, 0, overlay)
+                        
+                        # Save overlay
+                        overlay_path = os.path.join(output_dir, f"frame_{frame_number}_overlay_interpolated.jpg")
+                        cv2.imwrite(overlay_path, overlay)
+                        logger.info(f"Saved interpolated overlay to {overlay_path}")
         except Exception as e:
             logger.error(f"Error calculating homography: {str(e)}")
     else:

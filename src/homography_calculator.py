@@ -341,13 +341,15 @@ class HomographyCalculator:
 
     def calculate_homography(
         self, 
-        segmentation_features: Dict[str, List[Dict]]
+        segmentation_features: Dict[str, List[Dict]],
+        frame_idx: int = None  # Add parameter to track which frame this is for
     ) -> Optional[np.ndarray]:
         """
         Calculate homography matrix from segmentation features.
         
         Args:
             segmentation_features: Dictionary of segmentation features
+            frame_idx: Optional frame index for caching the matrix
             
         Returns:
             Homography matrix if successful, None otherwise
@@ -425,6 +427,15 @@ class HomographyCalculator:
             if not self.validate_homography(matrix):
                 return None
             
+            # Store the valid matrix in the cache if frame index is provided
+            if frame_idx is not None:
+                self.homography_cache[frame_idx] = matrix
+                # Also store in recent matrices for smoothing
+                self.recent_matrices.append(matrix)
+                if len(self.recent_matrices) > self.max_matrices:
+                    self.recent_matrices.popleft()  # Remove oldest matrix
+                self.logger.info(f"Stored valid homography matrix for frame {frame_idx}")
+                
             return matrix
             
         except Exception as e:
@@ -647,6 +658,7 @@ class HomographyCalculator:
         # Find the closest valid matrices before and after this frame
         valid_indices = sorted(self.homography_cache.keys())
         if not valid_indices:
+            self.logger.warning("No valid homography matrices in cache for interpolation")
             return None
             
         # Find the closest indices before and after
@@ -656,31 +668,54 @@ class HomographyCalculator:
         for idx in valid_indices:
             if idx <= frame_idx:
                 before_idx = idx
-            if idx >= frame_idx:
+            if idx > frame_idx:  # Changed from >= to > to fix edge case
                 after_idx = idx
                 break
+        
+        # Log the found indices
+        self.logger.info(f"Looking for homography for frame {frame_idx}")
+        self.logger.info(f"Found before_idx={before_idx}, after_idx={after_idx}")
         
         # If we have both before and after matrices, interpolate
         if before_idx is not None and after_idx is not None:
             matrix1 = self.homography_cache[before_idx]
             matrix2 = self.homography_cache[after_idx]
             
-            # Calculate interpolation factor
-            t = (frame_idx - before_idx) / (after_idx - before_idx)
+            # Check for division by zero (should not happen with fixed comparison)
+            frame_diff = after_idx - before_idx
+            if frame_diff == 0:
+                self.logger.warning("Before and after indices are the same, using before matrix")
+                interpolated = matrix1
+            else:
+                # Calculate interpolation factor
+                t = (frame_idx - before_idx) / frame_diff
+                self.logger.info(f"Interpolating with t={t:.3f}")
+                
+                # Interpolate and cache the result
+                interpolated = self.interpolate_homography(matrix1, matrix2, t)
             
-            # Interpolate and cache the result
-            interpolated = self.interpolate_homography(matrix1, matrix2, t)
+            # Store the interpolated matrix in the cache
             self.homography_cache[frame_idx] = interpolated
+            self.logger.info(f"Stored interpolated homography matrix for frame {frame_idx}")
             return interpolated
         
         # If we only have a matrix before this frame, use it
         elif before_idx is not None:
-            return self.homography_cache[before_idx]
+            self.logger.info(f"Using before matrix from frame {before_idx} for frame {frame_idx}")
+            before_matrix = self.homography_cache[before_idx]
+            # Store it in the cache for this frame as well
+            self.homography_cache[frame_idx] = before_matrix
+            return before_matrix
         
         # If we only have a matrix after this frame, use it
         elif after_idx is not None:
-            return self.homography_cache[after_idx]
+            self.logger.info(f"Using after matrix from frame {after_idx} for frame {frame_idx}")
+            after_matrix = self.homography_cache[after_idx]
+            # Store it in the cache for this frame as well
+            self.homography_cache[frame_idx] = after_matrix
+            return after_matrix
         
+        self.logger.warning(f"No suitable homography matrix found for frame {frame_idx}")
         return None
         
     def warp_frame(self, frame: np.ndarray, homography_matrix: np.ndarray, rink_dims: Tuple[int, int]) -> np.ndarray:
