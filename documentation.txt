@@ -8,11 +8,11 @@ The primary goal of this project is to develop a robust system that can automati
 - ✅ Developed player detection and orientation models
 - ✅ Created a 2D rink model with standardized coordinates
 - ✅ Built a homography calculation system for coordinate transformation
-- ⚠️ Working on improving homography accuracy for robust player tracking
+- ✅ Implemented two-pass homography interpolation for smooth camera transitions
 - ⚠️ Refining the mapping logic for faceoff circles and goal lines
 - ❌ Not yet implemented robust player tracking across multiple frames
 
-We're approximately 70% of the way toward a fully functioning system. The main blocker currently is ensuring consistent and accurate homography transformation between the broadcast view and the 2D rink model.
+We're approximately 80% of the way toward a fully functioning system. The main focus is now on improving player identity persistence across frames.
 
 ## System Components and Files
 
@@ -27,7 +27,26 @@ We're approximately 70% of the way toward a fully functioning system. The main b
 - Processes a subset of video frames for testing and visualization
 - Creates output directory with timestamp
 
-**Usage**: `./run_tracking.sh [start_frame] [end_frame]`
+**Usage**: 
+```bash
+./run_tracking.sh                   # Run with default settings (60 frames)
+./run_tracking.sh --max_frames 200  # Process 200 frames
+./run_tracking.sh --max_frames 900  # Process 900 frames
+```
+
+**Parameters**:
+- `--max_frames`: Maximum number of frames to process (default: 60)
+- Additional parameters can be modified in the script:
+  - `VIDEO_PATH`: Path to input video file (default: "data/videos/PIT_vs_CHI_2016_2.mp4")
+  - `SEGMENTATION_MODEL`: Path to segmentation model (default: "models/segmentation.pt")
+  - `DETECTION_MODEL`: Path to detection model (default: "models/detection.pt") 
+  - `ORIENTATION_MODEL`: Path to orientation model (default: "models/orient.pth")
+  - `RINK_COORDINATES`: Path to rink coordinates JSON file (default: "data/rink_coordinates.json")
+  - `RINK_IMAGE`: Path to rink image (default: "data/rink_resized.png")
+  - `OUTPUT_DIR`: Output directory (default: "output/tracking_results_<timestamp>")
+  - `START_SECOND`: Start second in video (default: 0)
+  - `NUM_SECONDS`: Duration in seconds to process (default: 15)
+  - `FRAME_STEP`: Process every Nth frame (default: 5)
 
 #### `initialize_project.sh`
 **Purpose**: Set up the initial project structure and dependencies
@@ -75,18 +94,27 @@ We're approximately 70% of the way toward a fully functioning system. The main b
   - Blue line mapping
 - Calculates the homography matrix using OpenCV
 - Provides debug information for visualization
+- Caches and interpolates homography matrices between frames
+- Performs camera zone detection (left, right, center) for better mapping
 
 **Key Classes and Methods**:
 - `HomographyCalculator`: Main class for homography calculation
-  - `process_frame()`: Processes a single frame for homography
-  - `calculate_homography()`: Computes the homography matrix
-  - `get_source_points()`: Extracts points from segmentation results
+  - `calculate_homography()`: Computes the homography matrix for a given frame
+  - `extract_source_points()`: Extracts points from segmentation results
   - `get_destination_points()`: Gets corresponding points from 2D rink model
+  - `detect_camera_zone()`: Determines which portion of the rink is shown
+  - `interpolate_homography()`: Performs true interpolation between two matrices
+  - `get_homography_matrix()`: Retrieves or calculates matrix for a specific frame
+  - `validate_homography()`: Checks if a homography matrix is valid
+  - `warp_frame()`: Transforms a frame using the homography matrix
+  - `project_point_to_rink()`: Maps a point from broadcast to rink coordinates
 
 **Dependencies**:
 - `numpy`: For numerical operations
 - `cv2`: For homography calculation
 - `json`: For reading rink coordinates
+- `collections`: For caching mechanism (deque)
+- `logging`: For detailed logging
 
 #### `player_detector.py`
 **Purpose**: Detect and localize players in broadcast frames
@@ -120,6 +148,52 @@ We're approximately 70% of the way toward a fully functioning system. The main b
 - `torch`: For model inference
 - `cv2`: For image processing
 
+#### `player_tracker.py` 
+**Purpose**: Orchestrate player tracking, homography calculation, and interpolation
+**Location**: `/src/player_tracker.py`
+**Function**:
+- Integrates segmentation, homography, player detection, and orientation
+- Processes frames and maintains state across the video
+- Manages the two-pass homography interpolation process
+- Caches homography matrices and records their source (original vs fallback)
+- Implements true interpolation between valid matrices
+
+**Key Classes and Methods**:
+- `PlayerTracker`: Main class for tracking
+  - `process_frame()`: Processes a single frame through the entire pipeline
+  - `interpolate_missing_homography()`: Performs two-pass homography interpolation
+  - `detect_players()`: Detects and tracks players in a frame
+  - `get_player_positions()`: Calculates player positions on the rink
+
+**Dependencies**:
+- All other modules in the system
+- `numpy`: For numerical operations
+- `collections`: For data structures
+- `logging`: For detailed logging
+
+#### `process_clip.py`
+**Purpose**: Main script for processing video clips
+**Location**: `/src/process_clip.py`
+**Function**:
+- Extracts frames from video clips
+- Creates the player tracker instance
+- Processes each frame through the tracking pipeline
+- Performs two-pass homography interpolation after all frames are processed
+- Generates output files and visualizations
+- Provides detailed progress information
+
+**Key Functions**:
+- `parse_args()`: Parses command-line arguments
+- `main()`: Main function for processing clip
+
+**Dependencies**:
+- `cv2`: For video processing
+- `numpy`: For numerical operations
+- `argparse`: For command-line argument parsing
+- `os`: For file system operations
+- `json`: For data serialization
+- `time`: For timing and performance measurement
+
 #### `visualizer.py`
 **Purpose**: Create visualizations of player tracking
 **Location**: `/src/visualizer.py`
@@ -140,106 +214,343 @@ We're approximately 70% of the way toward a fully functioning system. The main b
 - `matplotlib`: For plotting
 - `json`: For data serialization
 
-#### `tracking_system.py`
-**Purpose**: Main module that orchestrates the entire pipeline
-**Location**: `/src/tracking_system.py`
+#### `generate_quadview.py`
+**Purpose**: Generate visualizations for tracking results
+**Location**: `/src/generate_quadview.py`
 **Function**:
-- Integrates all components into a cohesive pipeline
-- Processes video frames sequentially
-- Handles frame extraction
-- Coordinates between different modules
-- Manages output generation
-
-**Key Classes**:
-- `TrackingSystem`: Main class that controls the entire process
+- Creates visual representations of tracking results
+- Generates a 2x2 grid with different views
+- Shows the original frame, segmented features, and mapped positions
 
 **Dependencies**:
-- All other modules in the system
+- `cv2`: For image manipulation
+- `numpy`: For numerical operations
+- `json`: For reading tracking data
 
-## CURRENT ISSUES
+## HOMOGRAPHY INTERPOLATION SYSTEM
 
-### 1. Faceoff Circle Classification
-The system currently has an issue with correctly classifying faceoff circles as left or right. In certain frames, a faceoff circle is detected on the right side of the frame but is incorrectly classified:
+Our system now implements a sophisticated two-pass homography interpolation algorithm that significantly improves camera transitions and handles frames where direct homography calculation fails.
 
+### How Homography Interpolation Works
+
+#### First Pass (During Frame Processing)
+1. The system attempts to calculate a homography matrix for each frame using detected rink features
+2. Successfully calculated matrices are stored with `homography_source="original"`
+3. When calculation fails, the system falls back to using the most recent valid matrix (`homography_source="fallback"`)
+4. Each frame's processed information, including homography success or failure status, is recorded
+
+#### Second Pass (True Interpolation)
+After all frames are processed, the `interpolate_missing_homography` method:
+1. Identifies all frames with original (successfully calculated) homography matrices
+2. For each frame with a fallback matrix, finds the nearest frames with original matrices before and after it
+3. Calculates an interpolation factor (t) based on the temporal position between the before and after frames
+4. Performs true interpolation between the before and after matrices using:
+   ```python
+   # Get the before and after homography matrices
+   matrix1 = frame_results[before_idx]["homography_matrix"]
+   matrix2 = frame_results[after_idx]["homography_matrix"]
+   
+   # Calculate interpolation factor (t)
+   t = (frame_idx - before_idx) / (after_idx - before_idx)
+   
+   # Interpolate using the weighted average
+   interpolated_matrix = homography_calculator.interpolate_homography(matrix1, matrix2, t)
+   ```
+5. For frames that don't have a valid "after" matrix (e.g., at the end of the video), keeps the fallback
+6. Updates each frame's metadata with information about how its homography was derived
+
+### Homography Matrix Interpolation
+The actual interpolation between two homography matrices happens in the `interpolate_homography` method of the `HomographyCalculator` class:
+
+```python
+def interpolate_homography(self, matrix1: np.ndarray, matrix2: np.ndarray, t: float) -> np.ndarray:
+    """
+    Linearly interpolate between two homography matrices.
+    
+    This performs true interpolation between two homography matrices, providing a 
+    smooth transition between different camera views. The interpolation creates
+    a weighted blend based on the temporal position between the two frames.
+    
+    Args:
+        matrix1: First homography matrix
+        matrix2: Second homography matrix
+        t: Interpolation factor (0.0 to 1.0)
+        
+    Returns:
+        Interpolated homography matrix
+    """
+    # Convert matrices to numpy arrays if they're lists
+    if isinstance(matrix1, list):
+        matrix1 = np.array(matrix1, dtype=np.float32)
+    if isinstance(matrix2, list):
+        matrix2 = np.array(matrix2, dtype=np.float32)
+        
+    # Perform weighted average
+    interpolated = (1 - t) * matrix1 + t * matrix2
+    
+    # Normalize the interpolated matrix by scaling the last element to 1
+    interpolated = interpolated / interpolated[2, 2]
+    
+    return interpolated
 ```
-Found 1 faceoff circles at x positions: [1107.0]
-All faceoff circles appear on right side of frame
-Goal line is LEFT (to the left of faceoff circles)
+
+This provides a smooth transition between camera views and significantly improves tracking accuracy during camera movement.
+
+## CURRENT STATUS AND ISSUES
+
+### Recent Improvements
+- ✅ Successfully implemented two-pass homography interpolation
+- ✅ Added tracking of homography source (original vs. fallback)
+- ✅ Improved camera zone detection for better mapping
+- ✅ Enhanced destination point caching and interpolation
+- ✅ Added detailed logging for the interpolation process
+
+### Remaining Issues
+
+#### 1. Interpolation Edge Cases
+When we're close to the end of the video and don't have "after" frames with valid homography matrices, we currently just keep the fallback from the nearest previous frame. This could be improved by:
+- Implementing extrapolation techniques based on recent homography trends
+- Using a weighted average of multiple previous matrices
+- Developing a predictive model for camera movement
+
+#### 2. Faceoff Circle and Goal Line Classification
+There are still occasional misclassifications of rink features:
+```
+Classified goal line at x=1092.5 as LEFT (leftmost point 641.0 is left of faceoff circle)
+```
+vs.
+```
+Classified goal line at x=1349.0 as RIGHT (no part left of any faceoff circle)
 ```
 
-This inconsistency is causing problems with homography calculation because:
-- We're misidentifying the side of the rink being shown in the broadcast
-- This leads to incorrect mappings between source points and destination points
-- The resulting homography matrix produces severe distortion in the transformed coordinates
+These inconsistencies can lead to incorrect homography calculation.
 
-### 2. Goal Line Classification Relative to Faceoff Circles
-The goal line classification is sometimes inconsistent with faceoff circle classification:
+#### 3. Player Identity Persistence
+The system doesn't yet maintain player identity across frames - each frame's players are detected independently. This prevents proper player tracking and trajectory analysis.
 
+## NEXT STEPS FOR DEVELOPMENT
+
+If you're continuing development on this project, here are the recommended next steps (in order of priority):
+
+### 1. Improve Player Identity Persistence
+Create a system to maintain player identity across frames:
+
+```python
+# Example implementation outline:
+class PlayerIdentityTracker:
+    def __init__(self):
+        self.tracked_players = {}  # Dictionary mapping player IDs to historical positions
+        self.next_id = 0
+        
+    def update_players(self, current_detections):
+        # For each new detection, either:
+        # 1. Match to an existing tracked player
+        # 2. Create a new tracked player
+        
+        assignments = self._assign_detections_to_tracked_players(current_detections)
+        
+        # Update tracked players
+        for player_id, detection_idx in assignments.items():
+            self.tracked_players[player_id].update(current_detections[detection_idx])
+            
+        # Create new tracks for unassigned detections
+        for i, detection in enumerate(current_detections):
+            if i not in assignments.values():
+                self.tracked_players[self.next_id] = TrackedPlayer(detection)
+                self.next_id += 1
+                
+    def _assign_detections_to_tracked_players(self, detections):
+        # Use Hungarian algorithm or simple nearest-neighbor matching
+        # to assign current detections to existing tracked players
+        # Based on position, appearance, jersey color, etc.
+        pass
 ```
-Goal line is LEFT (to the left of faceoff circles)
+
+This would be implemented in the `player_tracker.py` file.
+
+### 2. Further Enhance Homography Interpolation
+Improve the homography interpolation system:
+
+```python
+# Add to HomographyCalculator class:
+def extrapolate_homography(self, matrix, trend_matrices, frames_ahead):
+    """Extrapolate a homography matrix based on recent trends."""
+    # Calculate average rate of change in homography matrices
+    changes = []
+    for i in range(1, len(trend_matrices)):
+        change = trend_matrices[i] - trend_matrices[i-1]
+        changes.append(change)
+    
+    avg_change = sum(changes) / len(changes)
+    
+    # Apply projected change
+    extrapolated = matrix + (avg_change * frames_ahead)
+    extrapolated = extrapolated / extrapolated[2, 2]  # Normalize
+    
+    return extrapolated
 ```
 
-This statement seems contradictory when the faceoff circle is detected on the right side.
+This would improve handling of end-of-sequence frames and possibly allow for predictive tracking.
 
-### 3. Homography Calculation Failures
-Despite having enough source and destination points, homography calculation fails in many frames:
+### 3. Team Identification and Jersey Number Recognition
+Add team identification and jersey number recognition:
 
+```python
+# Example implementation outline:
+class TeamClassifier:
+    def __init__(self, team_colors_path):
+        self.team_colors = self._load_team_colors(team_colors_path)
+        
+    def _load_team_colors(self, path):
+        # Load team color definitions from JSON file
+        with open(path, 'r') as f:
+            return json.load(f)
+            
+    def classify_team(self, player_crop):
+        # Extract dominant colors from player crop
+        colors = self._extract_dominant_colors(player_crop)
+        
+        # Match colors to team definitions
+        team_scores = {}
+        for team, team_def in self.team_colors.items():
+            team_scores[team] = self._color_match_score(colors, team_def)
+            
+        # Return best match
+        return max(team_scores.items(), key=lambda x: x[1])[0]
+        
+    def _extract_dominant_colors(self, crop):
+        # Use k-means clustering to extract dominant colors
+        pass
+        
+    def _color_match_score(self, colors, team_def):
+        # Calculate matching score between extracted colors and team definition
+        pass
 ```
-Warning: No homography matrix for frame 664
-Warning: No homography matrix for frame 704
+
+This would significantly enhance player tracking capabilities.
+
+### 4. Improve Feature Classification
+Refine the rink feature classification logic:
+
+```python
+# Update detection logic in homography_calculator.py:
+def improved_feature_classification(self, segmentation_features):
+    """Enhanced rink feature classification using multiple heuristics."""
+    
+    # First, establish global reference points:
+    # 1. Frame center
+    frame_center_x = self.broadcast_width / 2
+    
+    # 2. Determine overall camera angle using all detected features
+    camera_angle = self._estimate_camera_angle(segmentation_features)
+    
+    # Now classify individual features with this contextual information
+    classified_features = {}
+    
+    # Classify faceoff circles
+    if "FaceoffCircle" in segmentation_features:
+        # Use camera angle + position to determine left/right
+        
+    # Classify goal lines 
+    if "GoalLine" in segmentation_features:
+        # Use camera angle + relative positions
+        
+    # And so on for other features...
+    
+    return classified_features
 ```
 
-These failures occur even when we have:
-- Correctly detected rink features
-- Properly identified source points
-- Valid destination points in the 2D rink model
+This would reduce classification inconsistencies.
 
-## NEXT STEPS
+### 5. Add Advanced Analytics
+Implement advanced analytics on player tracking data:
 
-### Immediate Fixes Needed
+```python
+# Example implementation outline:
+class TrackingAnalytics:
+    def __init__(self, tracking_data):
+        self.tracking_data = tracking_data
+        
+    def calculate_player_heatmaps(self, player_id):
+        """Generate heatmap of player positions."""
+        positions = []
+        for frame in self.tracking_data["frames"]:
+            for player in frame["players"]:
+                if player["id"] == player_id:
+                    positions.append((player["rink_x"], player["rink_y"]))
+        
+        return self._generate_heatmap(positions)
+        
+    def calculate_team_formation(self, team, frame_range):
+        """Analyze team formation during frame range."""
+        pass
+        
+    def calculate_player_speed(self, player_id):
+        """Calculate player speed over time."""
+        pass
+        
+    def identify_zone_entries(self):
+        """Identify zone entry events."""
+        pass
+        
+    def _generate_heatmap(self, positions):
+        # Generate heatmap visualization from position data
+        pass
+```
 
-1. **Improve Faceoff Circle Classification Logic**:
-   - Refine the blue line detection to ensure reliable x-position determination
-   - Implement a more robust heuristic for classifying faceoff circles based on:
-     - Position relative to blue line (primary method)
-     - Position relative to center of frame (backup method)
-     - Distance between circles (when multiple circles are detected)
-   - Add extensive logging for debugging classification decisions
+This would add significant value to the tracking system.
 
-2. **Fix Goal Line Classification**:
-   - Ensure goal line classification is consistent with faceoff circle classification
-   - Improve the logic for determining goal line side based on:
-     - Orientation of the line (angle and direction)
-     - Position relative to faceoff circles
-     - Distance from edge of frame
+## RUNNING THE SYSTEM
 
-3. **Enhance Homography Robustness**:
-   - Implement fallback mechanisms when the best-case mapping fails
-   - Add frame-to-frame continuity checks to prevent drastic homography changes
-   - Consider using previous frame's homography when current calculation fails
-   - Add homography matrix validation to detect and reject invalid transformations
+Follow these steps to run the player tracking system:
 
-4. **Add Comprehensive Error Handling**:
-   - Gracefully handle cases with incomplete feature detection
-   - Implement frame skipping for frames with insufficient features
-   - Add recovery mechanisms after detection failures
+### 1. Set Up the Environment
 
-### Medium-Term Improvements
+Ensure you have Python 3.7+ installed and required dependencies:
+```bash
+# Install required packages
+pip install opencv-python numpy torch ultralytics matplotlib
 
-1. **Implement Player Tracking Across Frames**:
-   - Add player identity persistence across multiple frames
-   - Implement algorithms to handle occlusion and player overlap
-   - Add jersey number recognition for player identification
+# Make sure the run script is executable
+chmod +x run_tracking.sh
+```
 
-2. **Improve Visualization System**:
-   - Enhance quadview with additional information
-   - Create a more interactive HTML-based visualization
-   - Add timeline scrubbing for easier navigation
+### 2. Prepare Your Data
 
-3. **Optimize Performance**:
-   - Improve processing speed through parallelization
-   - Optimize model inference for better throughput
-   - Reduce memory usage for handling longer video sequences
+Place your hockey video in the `data/videos/` directory. The default video is `PIT_vs_CHI_2016_2.mp4`.
+
+### 3. Run the Tracking System
+
+For basic usage:
+```bash
+./run_tracking.sh
+```
+
+For processing more frames:
+```bash
+./run_tracking.sh --max_frames 900
+```
+
+### 4. View the Results
+
+After processing completes, open the HTML visualization:
+```bash
+open output/tracking_results_*/visualization.html
+```
+
+Or view the quadview visualizations directly:
+```bash
+open output/tracking_results_*/quadview/
+```
+
+### 5. Analyze the JSON Output
+
+The system generates a JSON file with all tracking data:
+```bash
+cat output/tracking_results_*/player_detection_data_*.json
+```
+
+This file contains all the frame-by-frame tracking information, including player positions, homography matrices, and metadata about the interpolation process.
 
 ## Technical Details
 
@@ -251,6 +562,35 @@ The homography calculation is critical for accurately mapping player positions f
 3. Consistent mapping of source points to destination points
 
 The current implementation in `homography_calculator.py` uses OpenCV's `findHomography` function with RANSAC algorithm for robust estimation. The main challenge is correctly identifying corresponding points between the broadcast view and the 2D rink model.
+
+The homography matrix H is a 3x3 matrix that transforms coordinates from the broadcast view to the 2D rink model:
+```
+[x']   [h11 h12 h13] [x]
+[y'] = [h21 h22 h23] [y]
+[w']   [h31 h32 h33] [1]
+```
+
+And the final coordinates are:
+```
+x_rink = x' / w'
+y_rink = y' / w'
+```
+
+### Two-Pass Homography Interpolation
+
+Our system uses a two-pass approach for homography calculation:
+
+1. **First Pass**: Calculate homography matrices for all frames directly using detected features
+   - If successful, mark as `homography_source="original"`
+   - If unsuccessful, use nearest previous matrix and mark as `homography_source="fallback"`
+
+2. **Second Pass**: Perform true interpolation for frames with fallback matrices
+   - For a frame with index i, find nearest original homographies at indices before < i < after
+   - Calculate interpolation factor t = (i - before) / (after - before)
+   - Interpolate: H_i = (1-t) * H_before + t * H_after
+   - Mark as `homography_source="interpolated"`
+
+The interpolation equation is a weighted average where the weight (t) varies from 0.0 to 1.0 based on temporal position between the two reference frames.
 
 ### Player Position Mapping
 Once the homography matrix is calculated, player positions are mapped from broadcast coordinates to 2D rink coordinates using:
@@ -297,6 +637,11 @@ This transformation is why accurate homography calculation is critical - any err
    - Adjust segmentation model confidence thresholds
    - Verify that the frame contains visible rink features
    - Check for unusual lighting or camera angles
+
+4. **Issues with homography interpolation**:
+   - Check the logs for frames being marked as "original" vs "fallback"
+   - Ensure there are enough frames with successful homography calculations
+   - Look for large gaps between successful frames, as these may lead to poor interpolation
 
 ## Contact and Support
 For questions or contributions to the project, please contact the development team.
