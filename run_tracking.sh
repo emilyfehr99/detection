@@ -25,8 +25,8 @@ RINK_COORDINATES="data/rink_coordinates.json"
 RINK_IMAGE="data/rink_resized.png"
 OUTPUT_DIR="output/tracking_results_$(date +%Y%m%d_%H%M%S)"
 START_SECOND=0
-NUM_SECONDS=15
-FRAME_STEP=5
+NUM_SECONDS=30
+FRAME_STEP=1
 MAX_FRAMES=${MAX_FRAMES:-60}  # Default to 60 if not set
 
 # Create output directory
