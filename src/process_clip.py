@@ -5,6 +5,7 @@ import argparse
 import time
 from typing import Dict, List, Tuple, Any, Optional
 import json
+import shutil
 
 from player_tracker import PlayerTracker, NumpyEncoder
 
@@ -46,6 +47,11 @@ def process_clip(
     frames_dir = os.path.join(output_dir, "frames")
     if not os.path.exists(frames_dir):
         os.makedirs(frames_dir)
+    
+    # Copy rink image to output directory if provided
+    if rink_image_path:
+        rink_output_path = os.path.join(output_dir, "rink_resized.png")
+        shutil.copy2(rink_image_path, rink_output_path)
     
     # Initialize player tracker with optional parameters
     tracker = PlayerTracker(
@@ -231,16 +237,11 @@ def process_clip(
 def create_html_visualization(frames_info: List[Dict], output_dir: str, video_path: str) -> None:
     """
     Create a modern, interactive HTML visualization of the processed frames.
-    
-    Args:
-        frames_info: List of dictionaries containing frame information
-        output_dir: Directory to save the HTML file
-        video_path: Path to the original video
     """
     html_path = os.path.join(output_dir, "visualization.html")
     
     # Modern HTML template with improved UI
-    html_content = """
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -248,449 +249,333 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
         <style>
-            :root {
-                --primary-color: #2563eb;
-                --secondary-color: #3b82f6;
-                --background-color: #ffffff;
-                --text-color: #1f2937;
-                --border-color: #e5e7eb;
-                --card-background: #f9fafb;
-                --hover-color: #f3f4f6;
-            }
-
-            [data-theme="dark"] {
-                --primary-color: #3b82f6;
-                --secondary-color: #60a5fa;
-                --background-color: #111827;
-                --text-color: #f9fafb;
-                --border-color: #374151;
-                --card-background: #1f2937;
-                --hover-color: #374151;
-            }
-
-            * {
+            body {{
                 margin: 0;
                 padding: 0;
-                box-sizing: border-box;
-            }
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                background-color: #f5f5f5;
+            }}
 
-            body {
-                font-family: 'Inter', sans-serif;
-                background-color: var(--background-color);
-                color: var(--text-color);
-                line-height: 1.5;
-                transition: background-color 0.3s, color 0.3s;
-            }
-
-            .container {
+            .container {{
                 display: flex;
-                min-height: 100vh;
-                position: relative;
-            }
+                height: 100vh;
+                overflow: hidden;
+            }}
 
-            .sidebar {
-                width: 400px;  /* Increased from 300px */
+            .sidebar {{
+                width: 400px;
                 min-width: 300px;
                 max-width: 800px;
-                padding: 1.5rem;
-                background-color: var(--card-background);
-                border-right: 1px solid var(--border-color);
-                position: fixed;
-                height: 100vh;
+                background-color: white;
+                padding: 20px;
+                box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+                resize: horizontal;
+                overflow: auto;
+                z-index: 2;
+            }}
+
+            .main-content {{
+                flex: 1;
+                padding: 20px;
                 overflow-y: auto;
-                resize: horizontal;  /* Make sidebar resizable */
-                z-index: 10;
-            }
-
-            .main-content {
-                flex: 1;
-                margin-left: 400px;  /* Match initial sidebar width */
-                padding: 2rem;
-                transition: margin-left 0.2s;
-            }
-
-            /* Add resize handle styles */
-            .sidebar::after {
-                content: "";
-                position: absolute;
-                right: 0;
-                top: 0;
-                bottom: 0;
-                width: 4px;
-                background-color: var(--border-color);
-                cursor: col-resize;
-            }
-
-            .sidebar:hover::after {
-                background-color: var(--primary-color);
-            }
-
-            /* Update frame slider container position */
-            .frame-slider-container {
-                position: fixed;
-                top: 0;
-                left: 400px;  /* Match initial sidebar width */
-                right: 0;
-                padding: 1rem;
-                background-color: var(--card-background);
-                border-bottom: 1px solid var(--border-color);
-                z-index: 100;
                 display: flex;
-                align-items: center;
-                gap: 1rem;
-                transition: left 0.2s;
-            }
+                flex-direction: column;
+                gap: 20px;
+            }}
 
-            /* Make frames responsive */
-            .visualization img {
-                max-width: 100%;
-                height: auto;
-                border-radius: 0.375rem;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-                cursor: zoom-in;  /* Add zoom cursor */
-            }
+            .frame-controls {{
+                background-color: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                margin-bottom: 20px;
+            }}
 
-            /* Add fullscreen mode for images */
-            .visualization.fullscreen {
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background: rgba(0, 0, 0, 0.9);
-                z-index: 1000;
+            .frame-slider-container {{
                 display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: zoom-out;
-            }
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 10px;
+            }}
 
-            .visualization.fullscreen img {
-                max-height: 95vh;
-                max-width: 95vw;
-                object-fit: contain;
-            }
-
-            .header {
-                margin-bottom: 2rem;
-            }
-
-            h1 {
-                font-size: 1.875rem;
-                font-weight: 600;
-                margin-bottom: 0.5rem;
-            }
-
-            .stats {
-                background-color: var(--card-background);
-                padding: 1rem;
-                border-radius: 0.5rem;
-                margin-bottom: 1rem;
-            }
-
-            .frame-container {
-                background-color: var(--card-background);
-                border-radius: 0.5rem;
-                margin-bottom: 2rem;
-                overflow: hidden;
-                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            }
-
-            .frame-header {
-                padding: 1rem;
-                border-bottom: 1px solid var(--border-color);
-            }
-
-            .frame-title {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                margin-bottom: 0.5rem;
-            }
-
-            .frame-controls {
-                display: flex;
-                gap: 0.5rem;
-                margin-top: 1rem;
-            }
-
-            .viz-buttons {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 0.5rem;
-                margin-top: 1rem;
-            }
-
-            button {
-                padding: 0.5rem 1rem;
-                border: 1px solid var(--border-color);
-                border-radius: 0.375rem;
-                background-color: var(--background-color);
-                color: var(--text-color);
-                cursor: pointer;
-                font-size: 0.875rem;
-                transition: all 0.2s;
-            }
-
-            button:hover {
-                background-color: var(--hover-color);
-            }
-
-            button.active {
-                background-color: var(--primary-color);
-                color: white;
-                border-color: var(--primary-color);
-            }
-
-            .visualization {
-                padding: 1rem;
-                display: none;
-            }
-
-            .visualization.active {
-                display: block;
-            }
-
-            .progress-container {
-                position: fixed;
-                bottom: 0;
-                left: 300px;
-                right: 0;
-                padding: 1rem;
-                background-color: var(--card-background);
-                border-top: 1px solid var(--border-color);
-            }
-
-            .progress-bar {
+            #frame-slider {{
                 width: 100%;
-                height: 4px;
-                background-color: var(--border-color);
-                border-radius: 2px;
-                overflow: hidden;
-            }
-
-            .progress {
-                height: 100%;
-                background-color: var(--primary-color);
-                transition: width 0.3s;
-            }
-
-            .theme-toggle {
-                position: fixed;
-                top: 1rem;
-                right: 1rem;
-                z-index: 1000;
-            }
-
-            .loading {
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                display: none;
-            }
-
-            .loading.active {
-                display: block;
-            }
-
-            .frame-slider {
-                flex: 1;
-                height: 4px;
+                height: 6px;
                 -webkit-appearance: none;
-                background-color: var(--border-color);
-                border-radius: 2px;
+                background: #e0e0e0;
+                border-radius: 3px;
                 outline: none;
-            }
+                transition: background 0.2s;
+            }}
 
-            .frame-slider::-webkit-slider-thumb {
+            #frame-slider::-webkit-slider-thumb {{
                 -webkit-appearance: none;
                 width: 16px;
                 height: 16px;
+                background: #2196F3;
                 border-radius: 50%;
-                background-color: var(--primary-color);
                 cursor: pointer;
                 transition: all 0.2s;
-            }
+            }}
 
-            .frame-slider::-webkit-slider-thumb:hover {
+            #frame-slider::-webkit-slider-thumb:hover {{
                 transform: scale(1.2);
-            }
+                background: #1976D2;
+            }}
 
-            .frame-counter {
-                font-size: 0.875rem;
-                color: var(--text-color);
-                min-width: 100px;
-                text-align: right;
-            }
+            #frame-counter {{
+                font-size: 14px;
+                color: #666;
+                text-align: center;
+            }}
 
-            .metrics-table {
+            .viz-buttons {{
+                display: flex;
+                gap: 10px;
+                margin-top: 10px;
+            }}
+
+            .viz-buttons button {{
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                background: #f0f0f0;
+                color: #333;
+                cursor: pointer;
+                transition: all 0.2s;
+            }}
+
+            .viz-buttons button:hover {{
+                background: #e0e0e0;
+            }}
+
+            .viz-buttons button.active {{
+                background: #2196F3;
+                color: white;
+            }}
+
+            .metrics-table {{
                 width: 100%;
                 border-collapse: collapse;
-                margin: 1rem 0;
-                font-size: 0.875rem;
-            }
+                margin-top: 20px;
+            }}
 
             .metrics-table th,
-            .metrics-table td {
-                padding: 0.75rem;
-                border: 1px solid var(--border-color);
+            .metrics-table td {{
+                padding: 12px;
                 text-align: left;
-            }
+                border-bottom: 1px solid #eee;
+            }}
 
-            .metrics-table th {
-                background-color: var(--card-background);
+            .metrics-table th {{
+                background-color: #f8f9fa;
                 font-weight: 600;
-            }
+                color: #333;
+            }}
 
-            .metrics-table tr:nth-child(even) {
-                background-color: var(--hover-color);
-            }
+            .metrics-table tr:hover {{
+                background-color: #f5f5f5;
+            }}
 
-            .main-content {
-                margin-top: 60px;  /* Add space for the fixed slider */
-            }
+            .frame-container {{
+                display: none;
+                background: white;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }}
 
-            @media (max-width: 768px) {
-                .container {
-                    flex-direction: column;
-                }
+            .visualization {{
+                display: none;
+                width: 100%;
+                height: 100%;
+            }}
 
-                .sidebar {
-                    width: 100%;
-                    height: auto;
-                    position: relative;
-                }
+            .visualization img {{
+                width: 100%;
+                height: auto;
+                display: block;
+            }}
 
-                .main-content {
-                    margin-left: 0;
-                }
+            .tracking-data-viz {{
+                background-color: #000;
+                border-radius: 8px;
+                overflow: hidden;
+            }}
 
-                .progress-container {
-                    left: 0;
-                }
-            }
+            .tracking-data-viz canvas {{
+                width: 100%;
+                height: auto;
+                display: block;
+            }}
+
+            h1, h2 {{
+                color: #333;
+                margin-bottom: 20px;
+            }}
+
+            h2 {{
+                font-size: 1.2em;
+                margin-top: 30px;
+            }}
         </style>
         <script>
-            function showFrame(frameId) {
+            // Initialize state
+            let currentFrame = 0;
+            let currentViz = 'tracking';
+            let totalFrames = {len(frames_info)};
+            
+            // Parse frames data
+            const framesData = """ + json.dumps(frames_info) + """;
+
+            // Function to draw tracking data on canvas
+            function drawTrackingData(frameNum) {
+                const frameData = framesData[frameNum];
+                if (!frameData || !frameData.players) return;
+
+                const canvas = document.getElementById(`tracking-canvas-${frameNum}`);
+                if (!canvas) return;
+
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw rink background
+                const rinkImg = new Image();
+                rinkImg.onload = () => {
+                    ctx.drawImage(rinkImg, 0, 0, canvas.width, canvas.height);
+
+                    // Draw player positions
+                    frameData.players.forEach(player => {
+                        if (player.rink_position) {
+                            // Get coordinates from the rink_position object
+                            const x = player.rink_position.x;
+                            const y = player.rink_position.y;
+                            
+                            // Draw player dot with glow effect
+                            const isHome = player.type === 'home';
+                            const color = isHome ? '#ff4444' : '#4444ff';
+                            const glowColor = isHome ? '#ff000055' : '#0000ff55';
+
+                            // Glow effect
+                            ctx.beginPath();
+                            ctx.arc(x, y, 12, 0, 2 * Math.PI);
+                            ctx.fillStyle = glowColor;
+                            ctx.fill();
+
+                            // Player dot
+                            ctx.beginPath();
+                            ctx.arc(x, y, 8, 0, 2 * Math.PI);
+                            ctx.fillStyle = color;
+                            ctx.fill();
+
+                            // Player ID
+                            ctx.font = 'bold 14px Inter';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillStyle = 'white';
+                            ctx.strokeStyle = 'black';
+                            ctx.lineWidth = 3;
+                            ctx.strokeText(player.player_id, x, y - 20);
+                            ctx.fillText(player.player_id, x, y - 20);
+                        }
+                    });
+                };
+                rinkImg.onerror = (err) => {
+                    console.error('Error loading rink image:', err);
+                    ctx.font = '14px Inter';
+                    ctx.fillStyle = 'red';
+                    ctx.fillText('Error loading rink image', 10, 30);
+                };
+                // Use the rink image from the output directory
+                rinkImg.src = 'rink_resized.png';
+            }
+
+            // Function to show specific frame
+            function showFrame(frameNum) {
+                if (frameNum < 0 || frameNum >= totalFrames) return;
+
+                currentFrame = frameNum;
+                document.getElementById('frame-slider').value = frameNum;
+                document.getElementById('frame-counter').textContent = `Frame ${frameNum + 1} of ${totalFrames}`;
+
                 // Hide all frames
                 document.querySelectorAll('.frame-container').forEach(container => {
                     container.style.display = 'none';
                 });
 
                 // Show selected frame
-                const selectedFrame = document.getElementById(`frame-${frameId}`);
-                if (selectedFrame) {
-                    selectedFrame.style.display = 'block';
+                const currentContainer = document.getElementById(`frame-${frameNum}`);
+                if (currentContainer) {
+                    currentContainer.style.display = 'block';
+
+                    // If current visualization is tracking data, draw it
+                    if (currentViz === 'tracking_data') {
+                        drawTrackingData(frameNum);
+                    }
                 }
 
-                // Update frame counter
-                document.getElementById('frame-counter').textContent = `Frame ${frameId}`;
-
-                // Update metrics table with mock data for demonstration
-                updateMetricsTable(frameId);
+                // Update metrics table
+                updateMetricsTable(frameNum);
             }
 
-            function updateMetricsTable(frameId) {
-                // Mock data - in real implementation this would come from your tracking data
-                const players = [
-                    {id: '0.1', speed: (Math.random() * 20 + 10).toFixed(1), acceleration: (Math.random() * 5).toFixed(1), direction: (Math.random() * 360).toFixed(1)},
-                    {id: '0.2', speed: (Math.random() * 20 + 10).toFixed(1), acceleration: (Math.random() * 5).toFixed(1), direction: (Math.random() * 360).toFixed(1)},
-                    {id: '0.3', speed: (Math.random() * 20 + 10).toFixed(1), acceleration: (Math.random() * 5).toFixed(1), direction: (Math.random() * 360).toFixed(1)},
-                ];
+            // Function to show specific visualization
+            function showVisualization(frameId, vizType) {
+                currentViz = vizType;
+
+                // Update button states
+                const currentContainer = document.getElementById(`frame-${frameId}`);
+                if (currentContainer) {
+                    // Update button states
+                    currentContainer.querySelectorAll('.viz-buttons button').forEach(button => {
+                        button.classList.toggle('active', button.dataset.viz === vizType);
+                    });
+
+                    // Hide all visualizations
+                    currentContainer.querySelectorAll('.visualization').forEach(viz => {
+                        viz.style.display = 'none';
+                    });
+
+                    // Show selected visualization
+                    const vizContainer = document.getElementById(`frame-${frameId}-${vizType}`);
+                    if (vizContainer) {
+                        vizContainer.style.display = 'block';
+                        // Draw tracking data if needed
+                        if (vizType === 'tracking_data') {
+                            drawTrackingData(frameId);
+                        }
+                    }
+                }
+            }
+
+            // Update metrics table with real player data
+            function updateMetricsTable(frameNum) {
+                const frameData = framesData[frameNum];
+                if (!frameData || !frameData.players) return;
 
                 const tbody = document.querySelector('.metrics-table tbody');
-                tbody.innerHTML = players.map(player => `
+                tbody.innerHTML = frameData.players.map(player => `
                     <tr>
-                        <td>Player ${player.id}</td>
-                        <td>${player.speed} km/h</td>
-                        <td>${player.acceleration} m/s²</td>
-                        <td>${player.direction}°</td>
+                        <td>${player.player_id}</td>
+                        <td>${player.speed || 'N/A'} km/h</td>
+                        <td>${player.acceleration || 'N/A'} m/s²</td>
+                        <td>${player.orientation || 'N/A'}°</td>
                     </tr>
                 `).join('');
             }
 
-            function showVisualization(frameId, visType) {
-                const loading = document.querySelector('.loading');
-                loading.classList.add('active');
-
-                // Hide all visualizations for this frame
-                const visContainers = document.querySelectorAll(`#frame-${frameId} .visualization`);
-                visContainers.forEach(container => {
-                    container.classList.remove('active');
-                });
-
-                // Show the selected visualization
-                const selectedVis = document.getElementById(`${frameId}-${visType}`);
-                if (selectedVis) {
-                    selectedVis.classList.add('active');
-                }
-
-                // Update button states
-                const buttons = document.querySelectorAll(`#frame-${frameId} button`);
-                buttons.forEach(button => {
-                    button.classList.remove('active');
-                    if (button.getAttribute('data-vis') === visType) {
-                        button.classList.add('active');
-                    }
-                });
-
-                // Update progress bar
-                updateProgress(frameId);
-
-                // Hide loading after a short delay
-                setTimeout(() => {
-                    loading.classList.remove('active');
-                }, 300);
-            }
-
-            function updateProgress(frameId) {
-                const totalFrames = document.querySelectorAll('.frame-container').length;
-                const currentFrame = parseInt(frameId);
-                const progress = (currentFrame / totalFrames) * 100;
-                document.querySelector('.progress').style.width = `${progress}%`;
-            }
-
-            function toggleTheme() {
-                const html = document.documentElement;
-                const currentTheme = html.getAttribute('data-theme');
-                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-                html.setAttribute('data-theme', newTheme);
-                localStorage.setItem('theme', newTheme);
-            }
-
+            // Initialize on page load
             document.addEventListener('DOMContentLoaded', () => {
-                const savedTheme = localStorage.getItem('theme') || 'light';
-                document.documentElement.setAttribute('data-theme', savedTheme);
-
                 // Initialize frame slider
                 const slider = document.getElementById('frame-slider');
                 slider.addEventListener('input', (e) => {
-                    const frameId = parseInt(e.target.value);
-                    showFrame(frameId);
+                    showFrame(parseInt(e.target.value));
                 });
 
-                // Add sidebar resize observer
-                const sidebar = document.querySelector('.sidebar');
-                const mainContent = document.querySelector('.main-content');
-                const frameSliderContainer = document.querySelector('.frame-slider-container');
-
-                const resizeObserver = new ResizeObserver(entries => {
-                    for (let entry of entries) {
-                        const width = entry.contentRect.width;
-                        mainContent.style.marginLeft = `${width}px`;
-                        frameSliderContainer.style.left = `${width}px`;
-                    }
-                });
-
-                resizeObserver.observe(sidebar);
-
-                // Add click handlers for image fullscreen
-                document.querySelectorAll('.visualization').forEach(viz => {
-                    viz.addEventListener('click', function() {
-                        if (this.classList.contains('active')) {
-                            this.classList.toggle('fullscreen');
-                        }
+                // Add click handlers for visualization buttons
+                document.querySelectorAll('.viz-buttons button').forEach(button => {
+                    button.addEventListener('click', () => {
+                        const frameId = parseInt(button.closest('.frame-container').id.split('-')[1]);
+                        showVisualization(frameId, button.dataset.viz);
                     });
                 });
 
@@ -702,101 +587,95 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
     <body>
         <div class="container">
             <div class="sidebar">
-                <div class="header">
-                    <h1>Hockey Player Tracking</h1>
-                    <div class="stats">
-                        <p>Video: {os.path.basename(video_path)}</p>
-                        <p>Total frames: {len(frames_info)}</p>
-                    </div>
-                    <div class="metrics-container">
-                        <h2>Player Metrics</h2>
-                        <table class="metrics-table">
-                            <thead>
-                                <tr>
-                                    <th>Player ID</th>
-                                    <th>Speed</th>
-                                    <th>Acceleration</th>
-                                    <th>Direction</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <!-- Populated by JavaScript -->
-                            </tbody>
-                        </table>
-                    </div>
+                <h1>Hockey Player Tracking</h1>
+                <div class="stats">
+                    <p>Video: {os.path.basename(video_path)}</p>
+                    <p>Total frames: {len(frames_info)}</p>
+                </div>
+                <div class="metrics-container">
+                    <h2>Player Metrics</h2>
+                    <table class="metrics-table">
+                        <thead>
+                            <tr>
+                                <th>Player ID</th>
+                                <th>Speed</th>
+                                <th>Acceleration</th>
+                                <th>Direction</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
                 </div>
             </div>
-            <div class="frame-slider-container">
-                <input type="range" min="0" max="{len(frames_info) - 1}" value="0" class="frame-slider" id="frame-slider">
-                <div class="frame-counter" id="frame-counter">Frame 0</div>
-            </div>
             <div class="main-content">
+                <div class="frame-slider-container">
+                    <input type="range" min="0" max="{len(frames_info) - 1}" value="0" id="frame-slider">
+                    <div class="frame-counter" id="frame-counter">Frame 1 of {len(frames_info)}</div>
+                </div>
 """
 
     # Add frames to the HTML
     for frame_info in frames_info:
-        # Create buttons for different visualizations
+        frame_id = frame_info['frame_id']
+        
+        # Create visualization buttons
         vis_types = []
-        buttons_html = ""
-        
-        if "broadcast_path" in frame_info:
-            vis_types.append(("broadcast", "Player Detection"))
+        if "original_frame_path" in frame_info:
+            vis_types.append(("tracking", "Player Detection"))
         if "segmentation_path" in frame_info:
-            vis_types.append(("segmentation", "Segmentation Lines"))
-        if "warped_broadcast_path" in frame_info:
-            vis_types.append(("warped_broadcast", "Warped Broadcast"))
-        if "overlay_path" in frame_info:
-            vis_types.append(("overlay", "Overlay on Rink"))
-        if "rink_path" in frame_info:
-            vis_types.append(("rink", "Players on Rink"))
-        if "side_by_side_path" in frame_info:
-            vis_types.append(("side_by_side", "Side by Side"))
-        if "quadview_path" in frame_info:
-            vis_types.append(("quadview", "Quadview"))
+            vis_types.append(("segmentation", "Segmentation"))
+        if "rink_overlay_path" in frame_info:
+            vis_types.append(("rink", "Rink Overlay"))
+        # Add tracking data visualization if we have player positions
+        if any(p.get("rink_position") is not None for p in frame_info.get("players", [])):
+            vis_types.append(("tracking_data", "Tracking Data"))
         
-        # Create buttons
-        for vis_type, label in vis_types:
-            active_class = "active" if vis_type == "side_by_side" else ""
-            buttons_html += f'<button class="{active_class}" data-vis="{vis_type}" onclick="showVisualization({frame_info["frame_id"]}, \'{vis_type}\')">{label}</button>'
+        buttons_html = "".join([
+            f'<button class="{"active" if vtype == "tracking" else ""}" '
+            f'data-viz="{vtype}">{label}</button>'
+            for vtype, label in vis_types
+        ])
         
         # Create visualization containers
-        vis_containers_html = ""
+        vis_containers = []
         for vis_type, _ in vis_types:
-            display_class = "active" if vis_type == "side_by_side" else ""
-            if f"{vis_type}_path" in frame_info:
-                vis_containers_html += f"""
-                <div id="{frame_info['frame_id']}-{vis_type}" class="visualization {display_class}">
-                    <img src="{frame_info[f'{vis_type}_path']}" alt="{vis_type.capitalize()} Frame {frame_info['frame_id']}">
-                </div>
-                """
+            if vis_type == "tracking_data":
+                # Add tracking data visualization container with rink canvas
+                vis_containers.append(f"""
+                    <div id="frame-{frame_info['frame_id']}-tracking_data" class="visualization tracking-data-viz">
+                        <canvas id="tracking-canvas-{frame_info['frame_id']}" width="1400" height="600"></canvas>
+                    </div>
+                """)
+            else:
+                # Regular image-based visualization
+                path_key = f"{vis_type}_path" if vis_type != "tracking" else "original_frame_path"
+                if path_key in frame_info:
+                    frame_path = os.path.join(".", frame_info[path_key])
+                    vis_containers.append(f"""
+                        <div id="frame-{frame_info['frame_id']}-{vis_type}" class="visualization {'active' if vis_type == 'tracking' else ''}">
+                            <img src="{frame_path}" alt="{vis_type.capitalize()} Frame {frame_info['frame_id']}">
+                        </div>
+                    """)
         
-        # Only the first frame should be visible initially
-        display_style = "display: none;" if frame_info["frame_id"] > 0 else ""
+        vis_containers_html = "\n".join(vis_containers)
         
+        # Create frame container
         frame_html = f"""
-        <div class="frame-container" id="frame-{frame_info['frame_id']}" style="{display_style}">
-            <div class="frame-header">
-                <div class="frame-title">
-                    <h2>Frame {frame_info['frame_id']}</h2>
-                    <span>Time: {frame_info['timestamp']:.2f}s</span>
+                <div class="frame-container {'active' if frame_id == 0 else ''}" id="frame-{frame_id}">
+                    <div class="viz-buttons">
+                        {buttons_html}
+                    </div>
+                    <div class="visualizations">
+                        {vis_containers_html}
+                    </div>
                 </div>
-                <p>Players detected: {len(frame_info['players'])}</p>
-                <div class="viz-buttons">
-                    {buttons_html}
-                </div>
-            </div>
-            <div class="visualizations">
-                {vis_containers_html}
-            </div>
-        </div>
-        """
+"""
         html_content += frame_html
     
     # Close HTML
     html_content += """
             </div>
-            <button class="theme-toggle" onclick="toggleTheme()">Toggle Theme</button>
-            <div class="loading">Loading...</div>
         </div>
     </body>
     </html>
