@@ -85,6 +85,62 @@ class PlayerTracker:
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+    def calculate_player_metrics(self, current_player: Dict, frame_id: int, prev_frame_data: Optional[Dict] = None) -> Dict:
+        """
+        Calculate metrics for a player based on current and previous positions.
+        
+        Args:
+            current_player: Current player data dictionary
+            frame_id: Current frame ID
+            prev_frame_data: Previous frame data dictionary
+            
+        Returns:
+            Dictionary with calculated metrics
+        """
+        metrics = {
+            "speed": 0.0,
+            "acceleration": 0.0,
+            "orientation": current_player.get("orientation", 0.0)
+        }
+        
+        # If no rink position, return default metrics
+        if not current_player.get("rink_position"):
+            return metrics
+            
+        current_pos = current_player["rink_position"]
+        
+        # Find the same player in previous frame
+        if prev_frame_data and "players" in prev_frame_data:
+            # Match player by closest position
+            prev_players = [p for p in prev_frame_data["players"] if p.get("rink_position")]
+            if prev_players:
+                # Find closest previous player of same type
+                closest_prev = min(
+                    [p for p in prev_players if p["type"] == current_player["type"]], 
+                    key=lambda p: np.sqrt(
+                        (p["rink_position"][0] - current_pos[0])**2 + 
+                        (p["rink_position"][1] - current_pos[1])**2
+                    ),
+                    default=None
+                )
+                
+                if closest_prev:
+                    prev_pos = closest_prev["rink_position"]
+                    # Calculate speed (pixels/frame)
+                    dx = current_pos[0] - prev_pos[0]
+                    dy = current_pos[1] - prev_pos[1]
+                    metrics["speed"] = np.sqrt(dx**2 + dy**2)
+                    
+                    # Calculate acceleration if previous speed available
+                    prev_speed = closest_prev.get("speed", 0.0)
+                    metrics["acceleration"] = metrics["speed"] - prev_speed
+                    
+                    # Calculate orientation (in degrees)
+                    if dx != 0 or dy != 0:
+                        metrics["orientation"] = np.degrees(np.arctan2(dy, dx))
+        
+        return metrics
+
     def process_frame(self, frame: np.ndarray, frame_id: int, debug_mode: bool = False) -> Dict:
         """
         Process a single frame to track players.
@@ -103,6 +159,9 @@ class PlayerTracker:
             "timestamp": datetime.now().isoformat(),
             "players": []
         }
+        
+        # Get previous frame data if available
+        prev_frame_data = self.tracking_data.get(frame_id - 1)
         
         # Step 1: Process through segmentation model if available
         if self.segmentation_processor:
@@ -160,10 +219,18 @@ class PlayerTracker:
                         )
                         if rink_pos:
                             player_data["rink_position"] = rink_pos
+                            
+                            # Calculate metrics using previous frame data
+                            metrics = self.calculate_player_metrics(player_data, frame_id, prev_frame_data)
+                            player_data.update(metrics)
+                            
                     except Exception as e:
                         self.logger.error(f"Error projecting point: {e}")
                 
                 frame_data["players"].append(player_data)
+        
+        # Store frame data for next frame's calculations
+        self.tracking_data[frame_id] = frame_data
         
         return frame_data
     

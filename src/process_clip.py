@@ -6,8 +6,148 @@ import time
 from typing import Dict, List, Tuple, Any, Optional
 import json
 import shutil
+import math
 
 from player_tracker import PlayerTracker, NumpyEncoder
+
+
+def calculate_player_metrics(frames_info: List[Dict], fps: float = 30.0) -> List[Dict]:
+    """
+    Calculate player metrics (speed, acceleration, orientation) for each frame.
+    
+    Args:
+        frames_info: List of frame data dictionaries
+        fps: Video frames per second
+        
+    Returns:
+        Updated frames_info with metrics added
+    """
+    # Track player positions over time
+    player_history = {}
+    
+    for frame_idx, frame_data in enumerate(frames_info):
+        if not frame_data.get('players'):
+            continue
+            
+        for player in frame_data['players']:
+            player_id = player['player_id']
+            
+            # Initialize metrics
+            player['speed'] = 0.0
+            player['acceleration'] = 0.0
+            player['orientation'] = 0.0
+            
+            # Skip if no rink position
+            if not player.get('rink_position'):
+                continue
+                
+            current_pos = (
+                player['rink_position']['x'],
+                player['rink_position']['y']
+            )
+            
+            # Initialize player history if not exists
+            if player_id not in player_history:
+                player_history[player_id] = []
+            
+            # Calculate speed and acceleration if we have history
+            history = player_history[player_id]
+            if history:
+                # Calculate speed (pixels per second)
+                prev_pos = history[-1]['position']
+                time_diff = 1.0 / fps  # Time between frames
+                
+                # Calculate distance in pixels
+                distance = np.sqrt(
+                    (current_pos[0] - prev_pos[0])**2 +
+                    (current_pos[1] - prev_pos[1])**2
+                )
+                
+                # Convert to km/h (assuming 1 pixel = 0.1 meters)
+                speed = (distance * 0.1) / time_diff  # m/s
+                speed_kmh = speed * 3.6  # Convert to km/h
+                player['speed'] = round(speed_kmh, 2)
+                
+                # Calculate acceleration if we have at least 2 previous positions
+                if len(history) >= 2:
+                    prev_speed = history[-1]['speed']  # m/s
+                    acceleration = (speed - prev_speed) / time_diff  # m/s²
+                    player['acceleration'] = round(acceleration, 2)
+                
+                # Calculate orientation (angle between current and previous position)
+                dx = current_pos[0] - prev_pos[0]
+                dy = current_pos[1] - prev_pos[1]
+                orientation = np.degrees(np.arctan2(dy, dx))
+                # Normalize to 0-360 range
+                orientation = (orientation + 360) % 360
+                player['orientation'] = round(orientation, 2)
+            
+            # Update player history
+            history.append({
+                'position': current_pos,
+                'speed': speed if history else 0.0,
+                'frame_idx': frame_idx
+            })
+            
+            # Keep only last 10 frames of history
+            if len(history) > 10:
+                history.pop(0)
+    
+    return frames_info
+
+
+def calculate_moving_averages(frames_info: List[Dict], window_size: int = 5) -> List[Dict]:
+    """
+    Calculate moving averages for player metrics during the Python processing phase.
+    
+    Args:
+        frames_info: List of frame data dictionaries
+        window_size: Size of the moving average window
+        
+    Returns:
+        Updated frames_info with moving averages added
+    """
+    # Create a dictionary to store player metrics history
+    player_metrics = {}
+    
+    for frame_idx, frame_data in enumerate(frames_info):
+        if not frame_data.get('players'):
+            continue
+            
+        for player in frame_data['players']:
+            player_id = player['player_id']
+            
+            # Initialize player metrics history if not exists
+            if player_id not in player_metrics:
+                player_metrics[player_id] = {
+                    'speed': [],
+                    'acceleration': [],
+                    'orientation': []
+                }
+            
+            # Get current metrics
+            current_metrics = {
+                'speed': player.get('speed', 0),
+                'acceleration': player.get('acceleration', 0),
+                'orientation': player.get('orientation', 0)
+            }
+            
+            # Update metrics history
+            for metric in ['speed', 'acceleration', 'orientation']:
+                player_metrics[player_id][metric].append(current_metrics[metric])
+                
+                # Keep only the last window_size values
+                if len(player_metrics[player_id][metric]) > window_size:
+                    player_metrics[player_id][metric].pop(0)
+                
+                # Calculate moving average
+                if len(player_metrics[player_id][metric]) > 0:
+                    avg = sum(player_metrics[player_id][metric]) / len(player_metrics[player_id][metric])
+                    player[f'{metric}_moving_avg'] = round(avg, 2)
+                else:
+                    player[f'{metric}_moving_avg'] = 0
+    
+    return frames_info
 
 
 def process_clip(
@@ -53,7 +193,7 @@ def process_clip(
         rink_output_path = os.path.join(output_dir, "rink_resized.png")
         shutil.copy2(rink_image_path, rink_output_path)
     
-    # Initialize player tracker with optional parameters
+    # Initialize player tracker
     tracker = PlayerTracker(
         detection_model_path=detection_model_path,
         orientation_model_path=orientation_model_path,
@@ -113,10 +253,91 @@ def process_clip(
             # Process the frame
             frame_data = tracker.process_frame(frame, frame_idx)
             
-            # Create visualizations if rink image is provided
-            visualizations = {}
+            # Calculate metrics for this frame's players using previous frames
+            if len(processed_frames_info) > 0:
+                last_frame = processed_frames_info[-1]
+                for player in frame_data["players"]:
+                    # Find this player in the last frame
+                    last_player = next((p for p in last_frame["players"] if p["player_id"] == player["player_id"]), None)
+                    if last_player and "rink_position" in player and "rink_position" in last_player:
+                        # Calculate speed (pixels per second)
+                        dt = 1.0 / fps
+                        dx = player["rink_position"][0] - last_player["rink_position"][0]
+                        dy = player["rink_position"][1] - last_player["rink_position"][1]
+                        speed = math.sqrt(dx * dx + dy * dy) / dt
+                        player["speed"] = speed
+                        
+                        # Calculate acceleration
+                        if "speed" in last_player:
+                            player["acceleration"] = (speed - last_player["speed"]) / dt
+                        else:
+                            player["acceleration"] = 0.0
+                    else:
+                        player["speed"] = 0.0
+                        player["acceleration"] = 0.0
+            
+            # Calculate moving averages for metrics
+            window_size = 5
+            for player in frame_data["players"]:
+                # Find this player's history
+                player_history = []
+                for past_frame in processed_frames_info[-window_size:]:
+                    past_player = next((p for p in past_frame["players"] if p["player_id"] == player["player_id"]), None)
+                    if past_player:
+                        player_history.append(past_player)
+                
+                # Calculate moving averages
+                if player_history:
+                    speed_values = [p["speed"] for p in player_history if "speed" in p]
+                    acc_values = [p["acceleration"] for p in player_history if "acceleration" in p]
+                    orient_values = [p["orientation"] for p in player_history if "orientation" in p]
+                    
+                    player["speed_ma"] = sum(speed_values) / len(speed_values) if speed_values else 0.0
+                    player["acceleration_ma"] = sum(acc_values) / len(acc_values) if acc_values else 0.0
+                    player["orientation_ma"] = sum(orient_values) / len(orient_values) if orient_values else 0.0
+                else:
+                    player["speed_ma"] = player.get("speed", 0.0)
+                    player["acceleration_ma"] = player.get("acceleration", 0.0)
+                    player["orientation_ma"] = player.get("orientation", 0.0)
+            
+            # Create directory for individual frame if it doesn't exist
+            frame_dir = os.path.join(frames_dir, str(frame_idx))
+            if not os.path.exists(frame_dir):
+                os.makedirs(frame_dir)
+            
+            # Save original frame
+            original_path = os.path.join(frame_dir, "original.jpg")
+            cv2.imwrite(original_path, frame)
+            
+            # Create and save player detections visualization
+            detections_vis = frame.copy()
+            for player in frame_data["players"]:
+                if "bbox" in player:
+                    x1, y1, x2, y2 = player["bbox"]
+                    # Draw bounding box
+                    cv2.rectangle(detections_vis, 
+                                (int(x1), int(y1)), 
+                                (int(x2), int(y2)), 
+                                (0, 255, 0), 2)
+                    # Draw player ID
+                    cv2.putText(detections_vis, 
+                              player["player_id"], 
+                              (int(x1), int(y1) - 10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 
+                              0.5, (0, 255, 0), 2)
+            
+            detections_path = os.path.join(frame_dir, "detections.jpg")
+            cv2.imwrite(detections_path, detections_vis)
+            
+            # Create and save tracking visualization if rink image is provided
+            tracking_path = None
             if rink_image is not None:
                 visualizations = tracker.visualize_frame(frame, frame_data, rink_image)
+                if visualizations:
+                    tracking_vis = visualizations.get("rink")
+                    if tracking_vis is not None:
+                        tracking_path = os.path.join(frame_dir, "tracking.jpg")
+                        cv2.imwrite(tracking_path, tracking_vis)
             
             # Save frame info
             frame_info = {
@@ -128,11 +349,22 @@ def process_clip(
                         "player_id": p["player_id"],
                         "type": p["type"],
                         "bbox": p["bbox"],
-                        "rink_position": p.get("rink_position", None)
+                        "rink_position": p.get("rink_position", None),
+                        "speed": p.get("speed", 0.0),
+                        "acceleration": p.get("acceleration", 0.0),
+                        "orientation": p.get("orientation", 0.0),
+                        "speed_ma": p.get("speed_ma", 0.0),
+                        "acceleration_ma": p.get("acceleration_ma", 0.0),
+                        "orientation_ma": p.get("orientation_ma", 0.0)
                     } for p in frame_data["players"]
                 ],
-                "homography_success": frame_data.get("homography_success", False)
+                "homography_success": frame_data.get("homography_success", False),
+                "original_frame_path": os.path.join("frames", str(frame_idx), "original.jpg"),
+                "detections_path": os.path.join("frames", str(frame_idx), "detections.jpg")
             }
+            
+            if tracking_path:
+                frame_info["tracking_path"] = os.path.join("frames", str(frame_idx), "tracking.jpg")
             
             # Include information about whether homography was interpolated
             if frame_data.get("homography_interpolated", False):
@@ -158,22 +390,6 @@ def process_clip(
                         if k in ["blue_lines", "center_line", "goal_lines"]
                     }
                 }
-            
-            # Create directory for individual frame if it doesn't exist
-            frame_dir = os.path.join(frames_dir, str(frame_idx))
-            if not os.path.exists(frame_dir):
-                os.makedirs(frame_dir)
-            
-            # Save original frame
-            cv2.imwrite(os.path.join(frame_dir, "original.jpg"), frame)
-            frame_info["original_frame_path"] = os.path.join("frames", str(frame_idx), "original.jpg")
-            
-            # Save all visualizations if available
-            for vis_name, vis_img in visualizations.items():
-                if vis_img is not None:
-                    vis_path = os.path.join(frame_dir, f"{vis_name}.jpg")
-                    cv2.imwrite(vis_path, vis_img)
-                    frame_info[f"{vis_name}_path"] = os.path.join("frames", str(frame_idx), f"{vis_name}.jpg")
             
             processed_frames_info.append(frame_info)
             frames_processed += 1
@@ -228,379 +444,191 @@ def process_clip(
     
     # Create HTML visualization if rink image is provided
     if rink_image is not None:
-        create_html_visualization(processed_frames_info, output_dir, video_path)
+        create_html_visualization(processed_frames_info, output_dir, rink_image_path)
         print(f"\nHTML visualization created at {os.path.join(output_dir, 'visualization.html')}")
     
     return processed_frames_info
 
 
-def create_html_visualization(frames_info: List[Dict], output_dir: str, video_path: str) -> None:
+def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_image_path: Optional[str] = None) -> str:
     """
-    Create a modern, interactive HTML visualization of the processed frames.
+    Create an HTML visualization of the processed frames.
+    
+    Args:
+        frames_info: List of frame data dictionaries
+        output_dir: Directory to save output files
+        rink_image_path: Optional path to the rink image
+        
+    Returns:
+        Path to the generated HTML file
     """
     html_path = os.path.join(output_dir, "visualization.html")
     
-    # Modern HTML template with improved UI
+    # Convert frames_info to JSON string
+    frames_data_json = json.dumps(frames_info, cls=NumpyEncoder)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Hockey Player Tracking Visualization</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+        <title>Player Tracking Visualization</title>
         <style>
             body {{
+                font-family: Arial, sans-serif;
                 margin: 0;
-                padding: 0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+                padding: 20px;
                 background-color: #f5f5f5;
             }}
-
             .container {{
                 display: flex;
-                height: 100vh;
-                overflow: hidden;
-            }}
-
-            .sidebar {{
-                width: 400px;
-                min-width: 300px;
-                max-width: 800px;
-                background-color: white;
-                padding: 20px;
-                box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
-                resize: horizontal;
-                overflow: auto;
-                z-index: 2;
-            }}
-
-            .main-content {{
-                flex: 1;
-                padding: 20px;
-                overflow-y: auto;
-                display: flex;
-                flex-direction: column;
                 gap: 20px;
+                max-width: 1800px;
+                margin: 0 auto;
             }}
-
-            .frame-controls {{
-                background-color: white;
+            .main-panel {{
+                flex: 2;
+                background: white;
                 padding: 20px;
                 border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                margin-bottom: 20px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }}
-
-            .frame-slider-container {{
+            .side-panel {{
+                flex: 1;
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }}
+            .controls {{
+                margin: 20px 0;
                 display: flex;
-                flex-direction: column;
+                align-items: center;
                 gap: 10px;
-                margin-top: 10px;
             }}
-
-            #frame-slider {{
-                width: 100%;
-                height: 6px;
-                -webkit-appearance: none;
-                background: #e0e0e0;
-                border-radius: 3px;
-                outline: none;
-                transition: background 0.2s;
-            }}
-
-            #frame-slider::-webkit-slider-thumb {{
-                -webkit-appearance: none;
-                width: 16px;
-                height: 16px;
-                background: #2196F3;
-                border-radius: 50%;
-                cursor: pointer;
-                transition: all 0.2s;
-            }}
-
-            #frame-slider::-webkit-slider-thumb:hover {{
-                transform: scale(1.2);
-                background: #1976D2;
-            }}
-
-            #frame-counter {{
-                font-size: 14px;
-                color: #666;
-                text-align: center;
-            }}
-
-            .viz-buttons {{
-                display: flex;
-                gap: 10px;
-                margin-top: 10px;
-            }}
-
-            .viz-buttons button {{
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                background: #f0f0f0;
-                color: #333;
-                cursor: pointer;
-                transition: all 0.2s;
-            }}
-
-            .viz-buttons button:hover {{
-                background: #e0e0e0;
-            }}
-
-            .viz-buttons button.active {{
-                background: #2196F3;
-                color: white;
-            }}
-
             .metrics-table {{
                 width: 100%;
                 border-collapse: collapse;
                 margin-top: 20px;
             }}
-
-            .metrics-table th,
-            .metrics-table td {{
-                padding: 12px;
+            .metrics-table th, .metrics-table td {{
+                padding: 8px;
                 text-align: left;
-                border-bottom: 1px solid #eee;
+                border-bottom: 1px solid #ddd;
             }}
-
             .metrics-table th {{
                 background-color: #f8f9fa;
-                font-weight: 600;
-                color: #333;
             }}
-
-            .metrics-table tr:hover {{
-                background-color: #f5f5f5;
-            }}
-
-            .frame-container {{
-                display: none;
-                background: white;
-                border-radius: 8px;
-                overflow: hidden;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            }}
-
-            .visualization {{
-                display: none;
-                width: 100%;
-                height: 100%;
-            }}
-
-            .visualization img {{
-                width: 100%;
-                height: auto;
-                display: block;
-            }}
-
-            .tracking-data-viz {{
-                background-color: #000;
-                border-radius: 8px;
-                overflow: hidden;
-            }}
-
-            .tracking-data-viz canvas {{
-                width: 100%;
-                height: auto;
-                display: block;
-            }}
-
-            h1, h2 {{
-                color: #333;
+            .tabs {{
+                display: flex;
+                gap: 2px;
                 margin-bottom: 20px;
             }}
-
-            h2 {{
-                font-size: 1.2em;
-                margin-top: 30px;
+            .tab {{
+                padding: 10px 20px;
+                background: #e9ecef;
+                border: none;
+                cursor: pointer;
+                border-radius: 4px 4px 0 0;
+            }}
+            .tab.active {{
+                background: #007bff;
+                color: white;
+            }}
+            .tab-content {{
+                display: none;
+            }}
+            .tab-content.active {{
+                display: block;
+            }}
+            .frame-image {{
+                max-width: 100%;
+                height: auto;
+            }}
+            #frameSlider {{
+                flex-grow: 1;
+            }}
+            .button-group {{
+                display: flex;
+                gap: 10px;
+                margin: 10px 0;
+            }}
+            .control-button {{
+                padding: 5px 15px;
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }}
+            .control-button:hover {{
+                background: #0056b3;
+            }}
+            #tracking {{
+                position: relative;
+                width: 1400px;
+                height: 600px;
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
+            }}
+            .player-marker {{
+                position: absolute;
+                width: 10px;
+                height: 10px;
+                background-color: blue;
+                border-radius: 50%;
+                transform: translate(-50%, -50%);
+            }}
+            .player-label {{
+                position: absolute;
+                font-size: 12px;
+                color: blue;
+                transform: translate(10px, -10px);
             }}
         </style>
-        <script>
-            // Initialize state
-            let currentFrame = 0;
-            let currentViz = 'tracking';
-            let totalFrames = {len(frames_info)};
-            
-            // Parse frames data
-            const framesData = """ + json.dumps(frames_info) + """;
-
-            // Function to draw tracking data on canvas
-            function drawTrackingData(frameNum) {
-                const frameData = framesData[frameNum];
-                if (!frameData || !frameData.players) return;
-
-                const canvas = document.getElementById(`tracking-canvas-${frameNum}`);
-                if (!canvas) return;
-
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // Draw rink background
-                const rinkImg = new Image();
-                rinkImg.onload = () => {
-                    ctx.drawImage(rinkImg, 0, 0, canvas.width, canvas.height);
-
-                    // Draw player positions
-                    frameData.players.forEach(player => {
-                        if (player.rink_position) {
-                            // Get coordinates from the rink_position object
-                            const x = player.rink_position.x;
-                            const y = player.rink_position.y;
-                            
-                            // Draw player dot with glow effect
-                            const isHome = player.type === 'home';
-                            const color = isHome ? '#ff4444' : '#4444ff';
-                            const glowColor = isHome ? '#ff000055' : '#0000ff55';
-
-                            // Glow effect
-                            ctx.beginPath();
-                            ctx.arc(x, y, 12, 0, 2 * Math.PI);
-                            ctx.fillStyle = glowColor;
-                            ctx.fill();
-
-                            // Player dot
-                            ctx.beginPath();
-                            ctx.arc(x, y, 8, 0, 2 * Math.PI);
-                            ctx.fillStyle = color;
-                            ctx.fill();
-
-                            // Player ID
-                            ctx.font = 'bold 14px Inter';
-                            ctx.textAlign = 'center';
-                            ctx.textBaseline = 'middle';
-                            ctx.fillStyle = 'white';
-                            ctx.strokeStyle = 'black';
-                            ctx.lineWidth = 3;
-                            ctx.strokeText(player.player_id, x, y - 20);
-                            ctx.fillText(player.player_id, x, y - 20);
-                        }
-                    });
-                };
-                rinkImg.onerror = (err) => {
-                    console.error('Error loading rink image:', err);
-                    ctx.font = '14px Inter';
-                    ctx.fillStyle = 'red';
-                    ctx.fillText('Error loading rink image', 10, 30);
-                };
-                // Use the rink image from the output directory
-                rinkImg.src = 'rink_resized.png';
-            }
-
-            // Function to show specific frame
-            function showFrame(frameNum) {
-                if (frameNum < 0 || frameNum >= totalFrames) return;
-
-                currentFrame = frameNum;
-                document.getElementById('frame-slider').value = frameNum;
-                document.getElementById('frame-counter').textContent = `Frame ${frameNum + 1} of ${totalFrames}`;
-
-                // Hide all frames
-                document.querySelectorAll('.frame-container').forEach(container => {
-                    container.style.display = 'none';
-                });
-
-                // Show selected frame
-                const currentContainer = document.getElementById(`frame-${frameNum}`);
-                if (currentContainer) {
-                    currentContainer.style.display = 'block';
-
-                    // If current visualization is tracking data, draw it
-                    if (currentViz === 'tracking_data') {
-                        drawTrackingData(frameNum);
-                    }
-                }
-
-                // Update metrics table
-                updateMetricsTable(frameNum);
-            }
-
-            // Function to show specific visualization
-            function showVisualization(frameId, vizType) {
-                currentViz = vizType;
-
-                // Update button states
-                const currentContainer = document.getElementById(`frame-${frameId}`);
-                if (currentContainer) {
-                    // Update button states
-                    currentContainer.querySelectorAll('.viz-buttons button').forEach(button => {
-                        button.classList.toggle('active', button.dataset.viz === vizType);
-                    });
-
-                    // Hide all visualizations
-                    currentContainer.querySelectorAll('.visualization').forEach(viz => {
-                        viz.style.display = 'none';
-                    });
-
-                    // Show selected visualization
-                    const vizContainer = document.getElementById(`frame-${frameId}-${vizType}`);
-                    if (vizContainer) {
-                        vizContainer.style.display = 'block';
-                        // Draw tracking data if needed
-                        if (vizType === 'tracking_data') {
-                            drawTrackingData(frameId);
-                        }
-                    }
-                }
-            }
-
-            // Update metrics table with real player data
-            function updateMetricsTable(frameNum) {
-                const frameData = framesData[frameNum];
-                if (!frameData || !frameData.players) return;
-
-                const tbody = document.querySelector('.metrics-table tbody');
-                tbody.innerHTML = frameData.players.map(player => `
-                    <tr>
-                        <td>${player.player_id}</td>
-                        <td>${player.speed || 'N/A'} km/h</td>
-                        <td>${player.acceleration || 'N/A'} m/s²</td>
-                        <td>${player.orientation || 'N/A'}°</td>
-                    </tr>
-                `).join('');
-            }
-
-            // Initialize on page load
-            document.addEventListener('DOMContentLoaded', () => {
-                // Initialize frame slider
-                const slider = document.getElementById('frame-slider');
-                slider.addEventListener('input', (e) => {
-                    showFrame(parseInt(e.target.value));
-                });
-
-                // Add click handlers for visualization buttons
-                document.querySelectorAll('.viz-buttons button').forEach(button => {
-                    button.addEventListener('click', () => {
-                        const frameId = parseInt(button.closest('.frame-container').id.split('-')[1]);
-                        showVisualization(frameId, button.dataset.viz);
-                    });
-                });
-
-                // Show initial frame
-                showFrame(0);
-            });
-        </script>
     </head>
     <body>
         <div class="container">
-            <div class="sidebar">
-                <h1>Hockey Player Tracking</h1>
-                <div class="stats">
-                    <p>Video: {os.path.basename(video_path)}</p>
-                    <p>Total frames: {len(frames_info)}</p>
+            <div class="main-panel">
+                <div class="tabs">
+                    <button class="tab active" data-tab="original">Original Frame</button>
+                    <button class="tab" data-tab="detections">Player Detections</button>
+                    <button class="tab" data-tab="tracking">Player Tracking</button>
                 </div>
-                <div class="metrics-container">
-                    <h2>Player Metrics</h2>
+                
+                <div id="original" class="tab-content active">
+                    <img id="originalFrame" class="frame-image" src="" alt="Original frame">
+                </div>
+                <div id="detections" class="tab-content">
+                    <img id="detectionsFrame" class="frame-image" src="" alt="Player detections">
+                </div>
+                <div id="tracking" class="tab-content">
+                    <div id="trackingContainer" style="width: 1400px; height: 600px; position: relative;">
+                        <img id="rinkImage" src="rink_resized.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0;">
+                        <div id="playerMarkers"></div>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    <div class="button-group">
+                        <button class="control-button" id="prevFrame">◀</button>
+                        <button class="control-button" id="playPause">▶</button>
+                        <button class="control-button" id="nextFrame">▶</button>
+                    </div>
+                    <input type="range" id="frameSlider" min="0" max="{len(frames_info)-1}" value="0">
+                    <span id="frameNumber">Frame: 0</span>
+                </div>
+            </div>
+            <div class="side-panel">
+                <div class="metrics-table-container">
+                    <h3>Player Metrics</h3>
                     <table class="metrics-table">
                         <thead>
                             <tr>
                                 <th>Player ID</th>
-                                <th>Speed</th>
-                                <th>Acceleration</th>
-                                <th>Direction</th>
+                                <th>Speed (km/h)</th>
+                                <th>Acceleration (m/s²)</th>
+                                <th>Orientation (°)</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -608,82 +636,124 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, video_pa
                     </table>
                 </div>
             </div>
-            <div class="main-content">
-                <div class="frame-slider-container">
-                    <input type="range" min="0" max="{len(frames_info) - 1}" value="0" id="frame-slider">
-                    <div class="frame-counter" id="frame-counter">Frame 1 of {len(frames_info)}</div>
-                </div>
-"""
-
-    # Add frames to the HTML
-    for frame_info in frames_info:
-        frame_id = frame_info['frame_id']
-        
-        # Create visualization buttons
-        vis_types = []
-        if "original_frame_path" in frame_info:
-            vis_types.append(("tracking", "Player Detection"))
-        if "segmentation_path" in frame_info:
-            vis_types.append(("segmentation", "Segmentation"))
-        if "rink_overlay_path" in frame_info:
-            vis_types.append(("rink", "Rink Overlay"))
-        # Add tracking data visualization if we have player positions
-        if any(p.get("rink_position") is not None for p in frame_info.get("players", [])):
-            vis_types.append(("tracking_data", "Tracking Data"))
-        
-        buttons_html = "".join([
-            f'<button class="{"active" if vtype == "tracking" else ""}" '
-            f'data-viz="{vtype}">{label}</button>'
-            for vtype, label in vis_types
-        ])
-        
-        # Create visualization containers
-        vis_containers = []
-        for vis_type, _ in vis_types:
-            if vis_type == "tracking_data":
-                # Add tracking data visualization container with rink canvas
-                vis_containers.append(f"""
-                    <div id="frame-{frame_info['frame_id']}-tracking_data" class="visualization tracking-data-viz">
-                        <canvas id="tracking-canvas-{frame_info['frame_id']}" width="1400" height="600"></canvas>
-                    </div>
-                """)
-            else:
-                # Regular image-based visualization
-                path_key = f"{vis_type}_path" if vis_type != "tracking" else "original_frame_path"
-                if path_key in frame_info:
-                    frame_path = os.path.join(".", frame_info[path_key])
-                    vis_containers.append(f"""
-                        <div id="frame-{frame_info['frame_id']}-{vis_type}" class="visualization {'active' if vis_type == 'tracking' else ''}">
-                            <img src="{frame_path}" alt="{vis_type.capitalize()} Frame {frame_info['frame_id']}">
-                        </div>
-                    """)
-        
-        vis_containers_html = "\n".join(vis_containers)
-        
-        # Create frame container
-        frame_html = f"""
-                <div class="frame-container {'active' if frame_id == 0 else ''}" id="frame-{frame_id}">
-                    <div class="viz-buttons">
-                        {buttons_html}
-                    </div>
-                    <div class="visualizations">
-                        {vis_containers_html}
-                    </div>
-                </div>
-"""
-        html_content += frame_html
-    
-    # Close HTML
-    html_content += """
-            </div>
         </div>
+        <script>
+            const framesData = {frames_data_json};
+            const frameSlider = document.getElementById('frameSlider');
+            const frameNumber = document.getElementById('frameNumber');
+            let isPlaying = false;
+            let playInterval;
+            
+            // Tab switching
+            document.querySelectorAll('.tab').forEach(tab => {{
+                tab.addEventListener('click', () => {{
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    
+                    tab.classList.add('active');
+                    document.getElementById(tab.dataset.tab).classList.add('active');
+                }});
+            }});
+
+            function updateFrameImages(frameNum) {{
+                const frameData = framesData[frameNum];
+                if (!frameData) return;
+
+                // Update frame images
+                document.getElementById('originalFrame').src = frameData.original_frame_path;
+                document.getElementById('detectionsFrame').src = frameData.detections_path || '';
+                
+                // Update player markers
+                const playerMarkers = document.getElementById('playerMarkers');
+                playerMarkers.innerHTML = '';
+                
+                if (frameData.players) {{
+                    frameData.players.forEach(player => {{
+                        if (player.rink_position) {{
+                            const marker = document.createElement('div');
+                            marker.className = 'player-marker';
+                            marker.style.left = `${{player.rink_position.x}}px`;
+                            marker.style.top = `${{player.rink_position.y}}px`;
+                            
+                            const label = document.createElement('div');
+                            label.className = 'player-label';
+                            label.textContent = `${{player.player_id}} (${{player.speed_ma}} km/h)`;
+                            
+                            playerMarkers.appendChild(marker);
+                            playerMarkers.appendChild(label);
+                            label.style.left = `${{player.rink_position.x}}px`;
+                            label.style.top = `${{player.rink_position.y}}px`;
+                        }}
+                    }});
+                }}
+            }}
+            
+            function updateMetricsTable(frameNum) {{
+                const frameData = framesData[frameNum];
+                if (!frameData || !frameData.players) return;
+
+                const tbody = document.querySelector('.metrics-table tbody');
+                tbody.innerHTML = frameData.players.map(player => {{
+                    return `
+                        <tr>
+                            <td>${{player.player_id}}</td>
+                            <td>${{player.speed_ma}} km/h</td>
+                            <td>${{player.acceleration_ma}} m/s²</td>
+                            <td>${{player.orientation_ma}}°</td>
+                        </tr>
+                    `;
+                }}).join('');
+            }}
+
+            function updateFrame(frameNum) {{
+                frameSlider.value = frameNum;
+                frameNumber.textContent = `Frame: ${{frameNum}}`;
+                updateFrameImages(frameNum);
+                updateMetricsTable(frameNum);
+            }}
+            
+            // Frame navigation controls
+            document.getElementById('prevFrame').addEventListener('click', () => {{
+                const newFrame = Math.max(0, parseInt(frameSlider.value) - 1);
+                updateFrame(newFrame);
+            }});
+
+            document.getElementById('nextFrame').addEventListener('click', () => {{
+                const newFrame = Math.min(framesData.length - 1, parseInt(frameSlider.value) + 1);
+                updateFrame(newFrame);
+            }});
+
+            document.getElementById('playPause').addEventListener('click', () => {{
+                const button = document.getElementById('playPause');
+                if (isPlaying) {{
+                    clearInterval(playInterval);
+                    button.textContent = '▶';
+                }} else {{
+                    playInterval = setInterval(() => {{
+                        const newFrame = (parseInt(frameSlider.value) + 1) % framesData.length;
+                        updateFrame(newFrame);
+                    }}, 100); // 10 fps playback
+                    button.textContent = '⏸';
+                }}
+                isPlaying = !isPlaying;
+            }});
+            
+            frameSlider.addEventListener('input', (e) => {{
+                const frameNum = parseInt(e.target.value);
+                updateFrame(frameNum);
+            }});
+            
+            // Initialize with first frame
+            updateFrame(0);
+        </script>
     </body>
     </html>
     """
     
-    # Write HTML file
     with open(html_path, 'w') as f:
         f.write(html_content)
+    
+    return html_path
 
 
 def main():

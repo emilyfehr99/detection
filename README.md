@@ -61,6 +61,22 @@ This will:
   - `process_clip.py` - Processes short clips (for testing)
   - `resize_rink_image.py` - Utility to resize the rink image
   - `generate_quadview.py` - Creates visualizations of tracking results
+- `pose/` - Biomechanical analysis components
+  - `biomechanical9.py` - Advanced player pose analysis using MediaPipe and YOLO
+    - Tracks player joint positions and angles
+    - Calculates biomechanical metrics
+    - Provides detailed pose analysis for player movement
+- `player_utils/` - Additional player tracking utilities
+  - `pixels.py` - Advanced pixel-based player tracking
+    - Representative pixel extraction
+    - Team color analysis
+    - Player appearance tracking
+    - Velocity and trajectory calculation
+  - `players3.py` - Enhanced player tracking algorithms
+    - Multi-player tracking with persistent IDs
+    - Team assignment based on visual features
+    - Player movement prediction
+    - Track management and history
 - `models/` - Trained models
   - `segmentation.pt` - YOLOv8 model for rink feature segmentation
   - `detection.pt` - YOLOv8 model for player detection
@@ -239,3 +255,33 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Ultralytics for YOLOv8 implementation
 - PyTorch for deep learning framework
 - The hockey analytics community for inspiration and use cases
+
+## Advanced Features
+
+### Biomechanical Analysis
+
+The system includes advanced biomechanical analysis capabilities through the `pose/biomechanical9.py` module:
+
+- **Joint Tracking**: Uses MediaPipe Pose to track 33 key body landmarks
+- **Angle Calculation**: Measures joint angles and body orientation
+- **Movement Analysis**: Tracks player movement patterns and mechanics
+- **Performance Metrics**: Calculates speed, acceleration, and biomechanical efficiency
+- **GPU Acceleration**: Supports CUDA and MPS for faster processing
+
+### Enhanced Player Tracking
+
+The `player_utils` modules provide additional tracking capabilities:
+
+#### Pixel-Based Analysis (`pixels.py`)
+- Representative pixel extraction for consistent player identification
+- Team color analysis and classification
+- Appearance-based tracking for improved player persistence
+- Velocity and trajectory prediction
+
+#### Advanced Tracking Algorithms (`players3.py`)
+- Multi-player tracking with persistent IDs across frames
+- Team assignment based on visual features and color analysis
+- Movement prediction using velocity vectors
+- Track management with history and reactivation logic
+
+These components are not used in the default `run_tracking.sh` script but are available for advanced analysis and research purposes.
