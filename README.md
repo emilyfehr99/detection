@@ -201,6 +201,48 @@ This results in much smoother camera transitions and more accurate player tracki
 pip install opencv-python numpy torch torchvision ultralytics matplotlib
 ```
 
+## Data Export
+
+### JSON to CSV Conversion
+
+The system includes a utility to convert the tracking data from JSON to CSV format for easier analysis:
+
+```bash
+# Convert both tracking and homography data
+python src/json_to_csv_converter.py output/player_detection_data_<timestamp>.json
+
+# Convert only player tracking data
+python src/json_to_csv_converter.py output/player_detection_data_<timestamp>.json --type tracking
+
+# Convert only homography data
+python src/json_to_csv_converter.py output/player_detection_data_<timestamp>.json --type homography
+
+# Specify custom output directory
+python src/json_to_csv_converter.py output/player_detection_data_<timestamp>.json --output-dir my_csvs
+```
+
+The converter creates two types of CSV files:
+
+1. **Player Tracking CSV** (`*_tracking.csv`):
+   - `frame_id`: Frame number
+   - `timestamp`: Frame timestamp
+   - `player_id`: Unique player identifier
+   - `x, y`: Player position in rink coordinates
+   - `orientation`: Player facing direction
+   - `bbox_x1, bbox_y1, bbox_x2, bbox_y2`: Bounding box coordinates
+
+2. **Homography CSV** (`*_homography.csv`):
+   - `frame_id`: Frame number
+   - `timestamp`: Frame timestamp
+   - `homography_success`: Whether homography calculation succeeded
+   - `h00` through `h22`: Flattened 3x3 homography matrix
+
+This makes it easy to:
+- Import tracking data into spreadsheet software
+- Perform statistical analysis
+- Create custom visualizations
+- Share data with other tools and systems
+
 ## Troubleshooting
 
 ### Common Issues
