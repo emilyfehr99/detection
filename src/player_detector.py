@@ -3,7 +3,8 @@ import numpy as np
 import torch
 import os
 from typing import Dict, List, Any
-from ultralytics import YOLO
+from inference_sdk import InferenceHTTPClient
+import tempfile
 
 
 class PlayerDetector:
@@ -14,21 +15,27 @@ class PlayerDetector:
 
     def __init__(
         self, 
-        model_path: str, 
+        api_key: str = "YDZxw1AQEvclkzV0ZLOz",
+        workspace_name: str = "hockey-fghn7", 
+        workflow_id: str = "custom-workflow-3",
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         output_dir: str = None
     ):
         """
-        Initialize the player detector.
+        Initialize the player detector with Roboflow.
         
         Args:
-            model_path: Path to the detection model
-            device: Device to run inference on ("cuda" or "cpu")
+            api_key: Roboflow API key
+            workspace_name: Roboflow workspace name
+            workflow_id: Roboflow workflow ID
+            device: Device preference (kept for compatibility)
             output_dir: Directory to save processed frames and data
         """
-        self.model_path = model_path
+        self.api_key = api_key
+        self.workspace_name = workspace_name
+        self.workflow_id = workflow_id
         self.device = device
-        self.model = self._load_model()
+        self.client = self._initialize_client()
         self.output_dir = output_dir
         
         if output_dir:
@@ -52,23 +59,22 @@ class PlayerDetector:
         self.input_width = 640
         self.input_height = 640
         
-    def _load_model(self) -> Any:
+    def _initialize_client(self) -> InferenceHTTPClient:
         """
-        Load the detection model.
+        Initialize the Roboflow inference client.
         
         Returns:
-            Loaded detection model
+            Initialized Roboflow client
         """
-        if not os.path.exists(self.model_path):
-            msg = f"Model not found at {self.model_path}"
-            raise FileNotFoundError(msg)
-        
-        # Load YOLOv8 model
-        model = YOLO(self.model_path)
-        model.to(self.device)
-        print("Loaded YOLOv8 model and converted to float32")
-        
-        return model
+        try:
+            client = InferenceHTTPClient(
+                api_url="https://serverless.roboflow.com",
+                api_key=self.api_key
+            )
+            print("Initialized Roboflow inference client")
+            return client
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize Roboflow client: {str(e)}")
     
     def preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
         """
@@ -109,43 +115,83 @@ class PlayerDetector:
             List of dictionaries containing detection information
         """
         try:
-            # Run inference with YOLOv8
-            results = self.model(frame, verbose=False)
+            # Save frame temporarily for Roboflow API
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
+                cv2.imwrite(tmp_file.name, frame)
+                temp_path = tmp_file.name
             
-            # Process each detection
-            detections = []
-            for result in results:
-                boxes = result.boxes
-                for box in boxes:
-                    if box.conf.item() < self.conf_threshold:
-                        continue
+            try:
+                # Run inference with Roboflow workflow
+                result = self.client.run_workflow(
+                    workspace_name=self.workspace_name,
+                    workflow_id=self.workflow_id,
+                    images={"image": temp_path},
+                    use_cache=True
+                )
+                
+
+                # Process detections from Roboflow response
+                detections = []
+                if result and len(result) > 0:
+                    if "label_visualization" in result[0]:
+                        predictions = result[0]["label_visualization"].get("predictions", [])
                         
-                    # Get box coordinates (already in x1,y1,x2,y2 format)
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    
-                    # Get class name and confidence
-                    class_id = int(box.cls.item())
-                    class_name = self.class_mapping.get(class_id, "unknown")
-                    confidence = float(box.conf.item())
-                    
-                    # Calculate reference point (blue dot)
-                    ref_x = (x1 + x2) / 2  # x-coordinate at center of bbox
-                    ref_y = y2 - (y2 - y1) / 3  # y-coordinate at 1/3 from bottom
-                    
-                    # Create detection dictionary
-                    detection = {
-                        "bbox": (x1, y1, x2, y2),
-                        "confidence": confidence,
-                        "class": class_name,
-                        "reference_point": {
-                            "x": float(ref_x),  # Ensure coordinates are float
-                            "y": float(ref_y),
-                            "pixel_x": int(ref_x),  # Add pixel-space coordinates
-                            "pixel_y": int(ref_y)
-                        }
-                    }
-                    
-                    detections.append(detection)
+                        for pred in predictions:
+                            confidence = pred.get("confidence", 0.0)
+                            if confidence < self.conf_threshold:
+                                continue
+                            
+                            # Convert Roboflow format (x, y, width, height) to (x1, y1, x2, y2)
+                            x_center = pred.get("x", 0)
+                            y_center = pred.get("y", 0)
+                            width = pred.get("width", 0)
+                            height = pred.get("height", 0)
+                            
+                            x1 = x_center - width / 2
+                            y1 = y_center - height / 2
+                            x2 = x_center + width / 2
+                            y2 = y_center + height / 2
+                            
+                            # Get class information
+                            class_name = pred.get("class", "unknown")
+                            class_id = pred.get("class_id", 0)
+                            
+                            # Map Roboflow classes to expected format and filter for specific classes
+                            target_classes = ["player", "puck", "stick_blade", "goalkeeper", "goalie", "goalzone"]
+                            if class_name.lower() in target_classes:
+                                # Normalize goalkeeper/goalie naming
+                                if class_name.lower() in ["goalkeeper", "goalie"]:
+                                    mapped_class = "goalkeeper"
+                                else:
+                                    mapped_class = class_name.lower()
+                            else:
+                                continue  # Skip all other classes (referee, etc.)
+                            
+                            # Calculate reference point at bottom center
+                            ref_x = (x1 + x2) / 2  # x-coordinate at center of bbox
+                            ref_y = y2  # y-coordinate at bottom of bbox
+                            
+                            # Create detection dictionary
+                            detection = {
+                                "bbox": (x1, y1, x2, y2),
+                                "confidence": confidence,
+                                "class": mapped_class,
+                                "reference_point": {
+                                    "x": float(ref_x),  # Ensure coordinates are float
+                                    "y": float(ref_y),
+                                    "pixel_x": int(ref_x),  # Add pixel-space coordinates
+                                    "pixel_y": int(ref_y)
+                                }
+                            }
+                            
+                            detections.append(detection)
+                    # If label_visualization not found, skip this frame
+                    pass
+            
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
             
             # Visualize detections on frame
             vis_frame = self.visualize_detections(frame, detections)
@@ -158,9 +204,9 @@ class PlayerDetector:
                 )
                 cv2.imwrite(frame_path, vis_frame)
             
-            # Display frame
-            cv2.imshow('Player Detection', vis_frame)
-            cv2.waitKey(1)  # 1ms delay to allow window updates
+            # Display frame (disabled for real-time processing)
+            # cv2.imshow('Player Detection', vis_frame)
+            # cv2.waitKey(1)  # 1ms delay to allow window updates
             
             return detections
                 
@@ -207,7 +253,7 @@ class PlayerDetector:
     
     def visualize_detections(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
         """
-        Visualize detections on the frame.
+        Visualize detections on the frame using ellipses at bottom center.
         
         Args:
             frame: Input frame (BGR format)
@@ -219,32 +265,57 @@ class PlayerDetector:
         vis_frame = frame.copy()
         
         for det in detections:
-            x1, y1, x2, y2 = det["bbox"]
-            # Convert to integers for drawing
-            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            
-            # Draw bounding box
-            if det["class"] == "player":
-                color = (0, 255, 0)  # Green for players
-            elif det["class"] == "goalie":
-                color = (0, 0, 255)  # Red for goalies
-            else:
-                color = (255, 255, 0)  # Cyan for referees
-                
-            cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
-            
-            # Draw reference point (blue dot)
+            # Get reference point (bottom center)
             ref_point = det["reference_point"]
             ref_x = int(ref_point["pixel_x"])
             ref_y = int(ref_point["pixel_y"])
-            cv2.circle(vis_frame, (ref_x, ref_y), 4, (255, 0, 0), -1)
             
-            # Draw label with confidence
-            label = f"{det['class']} {det['confidence']:.2f}"
-            # Position label above bounding box
-            label_y = max(y1 - 10, 20)  # Ensure label is visible
-            cv2.putText(vis_frame, label, (x1, label_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            # Set color and ellipse size based on class
+            if det["class"] == "player":
+                color = (0, 255, 0)  # Green for players
+                ellipse_size = (20, 12)  # Larger ellipse for better visibility
+            elif det["class"] == "puck":
+                color = (0, 255, 255)  # Yellow for puck
+                ellipse_size = (12, 8)  # Larger ellipse for puck
+            elif det["class"] == "stick_blade":
+                color = (255, 0, 255)  # Magenta for stick blade
+                ellipse_size = (16, 10)  # Larger ellipse for stick blade
+            elif det["class"] == "goalkeeper":
+                color = (0, 0, 255)  # Red for goalkeeper
+                ellipse_size = (25, 15)  # Larger ellipse for goalkeeper
+            elif det["class"] == "goalzone":
+                color = (255, 165, 0)  # Orange for goal zone
+                ellipse_size = (30, 20)  # Large ellipse for goal zone
+            else:
+                continue  # Skip other classes
+            
+            # Draw filled ellipse at bottom center
+            cv2.ellipse(vis_frame, (ref_x, ref_y), ellipse_size, 0, 0, 360, color, -1)
+            
+            # Draw ellipse outline for better visibility
+            cv2.ellipse(vis_frame, (ref_x, ref_y), ellipse_size, 0, 0, 360, (255, 255, 255), 2)
+            
+            # Draw class label above ellipse
+            label = det['class'].upper()
+            if label == 'STICK_BLADE':
+                label = 'STICK'
+            elif label == 'GOALZONE':
+                label = 'GOAL'
+            
+            # Calculate label position (above the ellipse)
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+            label_x = ref_x - label_size[0] // 2
+            label_y = ref_y - ellipse_size[1] - 5
+            
+            # Draw label background
+            cv2.rectangle(vis_frame, 
+                         (label_x - 2, label_y - label_size[1] - 2),
+                         (label_x + label_size[0] + 2, label_y + 2),
+                         (0, 0, 0), -1)
+            
+            # Draw label text
+            cv2.putText(vis_frame, label, (label_x, label_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         
         return vis_frame
 

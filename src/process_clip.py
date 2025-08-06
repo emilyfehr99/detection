@@ -309,22 +309,27 @@ def process_clip(
             original_path = os.path.join(frame_dir, "original.jpg")
             cv2.imwrite(original_path, frame)
             
-            # Create and save player detections visualization
-            detections_vis = frame.copy()
+            # Create and save player detections visualization using ellipses
+            # Convert player data back to detection format for visualization
+            detections_for_vis = []
             for player in frame_data["players"]:
                 if "bbox" in player:
                     x1, y1, x2, y2 = player["bbox"]
-                    # Draw bounding box
-                    cv2.rectangle(detections_vis, 
-                                (int(x1), int(y1)), 
-                                (int(x2), int(y2)), 
-                                (0, 255, 0), 2)
-                    # Draw player ID
-                    cv2.putText(detections_vis, 
-                              player["player_id"], 
-                              (int(x1), int(y1) - 10),
-                              cv2.FONT_HERSHEY_SIMPLEX, 
-                              0.5, (0, 255, 0), 2)
+                    # Calculate reference point at bottom center
+                    ref_x = (x1 + x2) / 2
+                    ref_y = y2
+                    
+                    detection = {
+                        "class": player.get("type", "player"),
+                        "reference_point": {
+                            "pixel_x": int(ref_x),
+                            "pixel_y": int(ref_y)
+                        }
+                    }
+                    detections_for_vis.append(detection)
+            
+            # Use the PlayerDetector's ellipse visualization method
+            detections_vis = tracker.player_detector.visualize_detections(frame, detections_for_vis)
             
             detections_path = os.path.join(frame_dir, "detections.jpg")
             cv2.imwrite(detections_path, detections_vis)

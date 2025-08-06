@@ -37,8 +37,8 @@ class PlayerTracker:
 
     def __init__(
         self,
-        detection_model_path: str,
         orientation_model_path: str,
+        detection_model_path: str = None,
         output_dir: str = None,
         segmentation_model_path: Optional[str] = None,
         rink_coordinates_path: Optional[str] = None,
@@ -64,7 +64,9 @@ class PlayerTracker:
         
         # Initialize components
         self.player_detector = PlayerDetector(
-            model_path=detection_model_path, 
+            api_key="YDZxw1AQEvclkzV0ZLOz",
+            workspace_name="hockey-fghn7", 
+            workflow_id="custom-workflow-3",
             device=device,
             output_dir=output_dir
         )
