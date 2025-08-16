@@ -224,8 +224,12 @@ def process_clip(
     
     # Calculate start and end frames
     start_frame = int(start_second * fps)
-    num_frames = int(num_seconds * fps)
-    end_frame = min(start_frame + num_frames, total_frames)
+    if num_seconds == 0:
+        # Process entire video
+        end_frame = total_frames
+    else:
+        num_frames = int(num_seconds * fps)
+        end_frame = min(start_frame + num_frames, total_frames)
     
     print(f"Processing from frame {start_frame} to {end_frame} ({end_frame - start_frame} frames)")
     
@@ -240,6 +244,10 @@ def process_clip(
     
     # Use the max_frames parameter instead of hard-coded value
     max_frames_to_process = max_frames
+    
+    # Limit the number of frames to process
+    if max_frames_to_process > 0:
+        end_frame = min(end_frame, start_frame + max_frames_to_process)
     
     while frame_idx < end_frame:
         ret, frame = cap.read()
