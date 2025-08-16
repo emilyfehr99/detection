@@ -368,7 +368,10 @@ def process_clip(
                         "orientation": p.get("orientation", 0.0),
                         "speed_ma": p.get("speed_ma", 0.0),
                         "acceleration_ma": p.get("acceleration_ma", 0.0),
-                        "orientation_ma": p.get("orientation_ma", 0.0)
+                        "orientation_ma": p.get("orientation_ma", 0.0),
+                        "team": p.get("team", "Unknown"),
+                        "team_confidence": p.get("team_confidence", 0.0),
+                        "team_detection_method": p.get("team_detection_method", "unknown")
                     } for p in frame_data["players"]
                 ],
                 "homography_success": frame_data.get("homography_success", False),
@@ -598,6 +601,53 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 color: blue;
                 transform: translate(10px, -10px);
             }}
+            
+            .team-info {{
+                padding: 20px;
+                background: #f8f9fa;
+                border-radius: 8px;
+                margin-top: 20px;
+            }}
+            .team-distribution, .confidence-analysis {{
+                margin-bottom: 20px;
+            }}
+            .team-stats, .confidence-stats {{
+                display: flex;
+                gap: 20px;
+                margin-top: 10px;
+            }}
+            .team-stat, .confidence-stat {{
+                background: white;
+                padding: 10px 15px;
+                border-radius: 6px;
+                border: 1px solid #dee2e6;
+                text-align: center;
+                min-width: 120px;
+            }}
+            .team-label, .confidence-label {{
+                font-weight: bold;
+                color: #495057;
+                display: block;
+                margin-bottom: 5px;
+                font-size: 12px;
+            }}
+            .team-table-container {{
+                margin-top: 20px;
+            }}
+            .team-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 10px;
+            }}
+            .team-table th, .team-table td {{
+                padding: 8px;
+                text-align: left;
+                border-bottom: 1px solid #ddd;
+            }}
+            .team-table th {{
+                background-color: #e9ecef;
+                font-weight: bold;
+            }}
         </style>
     </head>
     <body>
@@ -607,6 +657,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     <button class="tab active" data-tab="original">Original Frame</button>
                     <button class="tab" data-tab="detections">Player Detections</button>
                     <button class="tab" data-tab="tracking">Player Tracking</button>
+                    <button class="tab" data-tab="team_detection">Team Detection</button>
                 </div>
                 
                 <div id="original" class="tab-content active">
@@ -619,6 +670,63 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     <div id="trackingContainer" style="width: 1400px; height: 600px; position: relative;">
                         <img id="rinkImage" src="rink_resized.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0;">
                         <div id="playerMarkers"></div>
+                    </div>
+                </div>
+                
+                <div id="team_detection" class="tab-content">
+                    <div id="teamDetectionContainer">
+                        <h3>Team Detection Analysis</h3>
+                        <div class="team-info">
+                            <div class="team-distribution">
+                                <h4>Team Distribution:</h4>
+                                <div class="team-stats">
+                                    <div class="team-stat">
+                                        <span class="team-label">Team A:</span>
+                                        <span id="teamACount">-</span>
+                                    </div>
+                                    <div class="team-stat">
+                                        <span class="team-label">Team B:</span>
+                                        <span id="teamBCount">-</span>
+                                    </div>
+                                    <div class="team-stat">
+                                        <span class="team-label">Unknown:</span>
+                                        <span id="unknownCount">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="confidence-analysis">
+                                <h4>Detection Confidence:</h4>
+                                <div class="confidence-stats">
+                                    <div class="confidence-stat">
+                                        <span class="confidence-label">High Confidence:</span>
+                                        <span id="highConfidenceCount">-</span>
+                                    </div>
+                                    <div class="confidence-stat">
+                                        <span class="confidence-label">Medium Confidence:</span>
+                                        <span id="mediumConfidenceCount">-</span>
+                                    </div>
+                                    <div class="confidence-stat">
+                                        <span class="confidence-label">Low Confidence:</span>
+                                        <span id="lowConfidenceCount">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="team-table-container">
+                                <h4>Player Team Assignments:</h4>
+                                <table class="team-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Player ID</th>
+                                            <th>Team</th>
+                                            <th>Confidence</th>
+                                            <th>Method</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="teamTableBody">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -717,12 +825,66 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     `;
                 }}).join('');
             }}
+            
+            function updateTeamDetection(frameNum) {{
+                const frameData = framesData[frameNum];
+                if (!frameData || !frameData.players) return;
+
+                // Count team distribution
+                let teamACount = 0;
+                let teamBCount = 0;
+                let unknownCount = 0;
+                let highConfidence = 0;
+                let mediumConfidence = 0;
+                let lowConfidence = 0;
+
+                frameData.players.forEach(player => {{
+                    const team = player.team || 'Unknown';
+                    const confidence = player.team_confidence || 0;
+                    
+                    if (team.includes('Team A')) teamACount++;
+                    else if (team.includes('Team B')) teamBCount++;
+                    else unknownCount++;
+                    
+                    if (confidence > 0.8) highConfidence++;
+                    else if (confidence > 0.6) mediumConfidence++;
+                    else if (confidence > 0.4) lowConfidence++;
+                }});
+
+                // Update team distribution
+                document.getElementById('teamACount').textContent = teamACount;
+                document.getElementById('teamBCount').textContent = teamBCount;
+                document.getElementById('unknownCount').textContent = unknownCount;
+                
+                // Update confidence analysis
+                document.getElementById('highConfidenceCount').textContent = highConfidence;
+                document.getElementById('mediumConfidenceCount').textContent = mediumConfidence;
+                document.getElementById('lowConfidenceCount').textContent = lowConfidence;
+
+                // Update team table
+                const teamTbody = document.getElementById('teamTableBody');
+                teamTbody.innerHTML = frameData.players.map(player => {{
+                    const team = player.team || 'Unknown';
+                    const confidence = player.team_confidence || 0;
+                    const method = player.team_detection_method || 'unknown';
+                    
+                    return `
+                        <tr>
+                            <td>${{player.player_id}}</td>
+                            <td>${{team}}</td>
+                            <td>${{(confidence * 100).toFixed(1)}}%</td>
+                            <td>${{method}}</td>
+                        </tr>
+                    `;
+                }}).join('');
+            }}
 
             function updateFrame(frameNum) {{
                 frameSlider.value = frameNum;
                 frameNumber.textContent = `Frame: ${{frameNum}}`;
                 updateFrameImages(frameNum);
                 updateMetricsTable(frameNum);
+                updateTeamDetection(frameNum);
             }}
             
             // Frame navigation controls

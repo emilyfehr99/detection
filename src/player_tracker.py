@@ -11,6 +11,7 @@ from segmentation_processor import SegmentationProcessor
 from player_detector import PlayerDetector
 from orientation_detector import OrientationDetector
 from homography_calculator import HomographyCalculator
+from jersey_color_detector import JerseyColorDetector
 from ultralytics import YOLO
 
 
@@ -80,6 +81,9 @@ class PlayerTracker:
         self.homography_calculator = None
         if rink_coordinates_path:
             self.homography_calculator = HomographyCalculator(rink_coordinates_path)
+        
+        # Initialize jersey color detector for team identification
+        self.jersey_detector = JerseyColorDetector()
         
         # Initialize tracking data
         self.tracking_data = {}
@@ -225,9 +229,20 @@ class PlayerTracker:
                             # Calculate metrics using previous frame data
                             metrics = self.calculate_player_metrics(player_data, frame_id, prev_frame_data)
                             player_data.update(metrics)
-                            
                     except Exception as e:
                         self.logger.error(f"Error projecting point: {e}")
+                
+                # Add team detection using jersey color analysis
+                try:
+                    team_info = self.jersey_detector.detect_team(frame, detection["bbox"])
+                    player_data["team"] = self.jersey_detector.get_team_display_name(team_info)
+                    player_data["team_confidence"] = team_info.get("confidence", 0.0)
+                    player_data["team_detection_method"] = team_info.get("method", "unknown")
+                except Exception as e:
+                    self.logger.warning(f"Error in team detection: {e}")
+                    player_data["team"] = "Unknown"
+                    player_data["team_confidence"] = 0.0
+                    player_data["team_detection_method"] = "unknown"
                 
                 frame_data["players"].append(player_data)
         
