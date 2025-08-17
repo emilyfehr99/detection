@@ -10,6 +10,9 @@ from typing import Dict, List, Tuple, Optional
 import logging
 from sklearn.cluster import KMeans
 from sklearn.metrics import pairwise_distances
+from colormath.color_objects import LabColor, sRGBColor
+from colormath.color_conversions import convert_color
+from colormath.color_diff import delta_e_cie2000
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +209,70 @@ class JerseyColorDetector:
             logger.warning(f"Error calculating HSV similarity: {e}")
             return 0.0
     
+    def calculate_ciede2000_difference(self, color1: Tuple[int, int, int], color2: Tuple[int, int, int]) -> float:
+        """
+        Calculate CIEDE2000 color difference between two RGB colors.
+        This is the most accurate color difference formula for human perception.
+        
+        Args:
+            color1: First RGB color tuple
+            color2: Second RGB color tuple
+            
+        Returns:
+            CIEDE2000 color difference (lower = more similar)
+        """
+        try:
+            # Convert RGB to Lab color space using colormath
+            rgb1 = sRGBColor(color1[0]/255.0, color1[1]/255.0, color1[2]/255.0)
+            rgb2 = sRGBColor(color2[0]/255.0, color2[1]/255.0, color2[2]/255.0)
+            
+            # Convert to Lab color space
+            lab1 = convert_color(rgb1, LabColor)
+            lab2 = convert_color(rgb2, LabColor)
+            
+            # Calculate CIEDE2000 difference
+            diff = delta_e_cie2000(lab1, lab2)
+            
+            # Handle numpy compatibility
+            if hasattr(diff, 'item'):
+                return float(diff.item())
+            return float(diff)
+            
+        except Exception as e:
+            logger.warning(f"Error calculating CIEDE2000 difference: {e}")
+            # Fallback to simple Euclidean distance if CIEDE2000 fails
+            distance = np.linalg.norm(np.array(color1) - np.array(color2))
+            return distance
+    
+    def calculate_lab_similarity(self, color1: Tuple[int, int, int], color2: Tuple[int, int, int]) -> float:
+        """
+        Calculate similarity between two colors using Lab color space and CIEDE2000.
+        
+        Args:
+            color1: First RGB color tuple
+            color2: Second RGB color tuple
+            
+        Returns:
+            Similarity score (0-1, higher = more similar)
+        """
+        try:
+            # Calculate CIEDE2000 difference
+            ciede2000_diff = self.calculate_ciede2000_difference(color1, color2)
+            
+            # Convert to similarity score (CIEDE2000 typically ranges 0-100)
+            # Lower difference = higher similarity
+            max_expected_diff = 100.0  # More reasonable threshold for jersey colors
+            similarity = max(0, 1 - (ciede2000_diff / max_expected_diff))
+            
+            return similarity
+            
+        except Exception as e:
+            logger.warning(f"Error calculating Lab similarity: {e}")
+            # Fallback to simple RGB similarity
+            distance = np.linalg.norm(np.array(color1) - np.array(color2))
+            max_distance = np.sqrt(3 * 255**2)
+            return 1 - (distance / max_distance)
+    
     def match_colors_to_team(self, colors: List[Tuple[int, int, int]]) -> Dict[str, float]:
         """
         Match extracted colors to team definitions.
@@ -226,18 +293,16 @@ class JerseyColorDetector:
                 for color in colors:
                     best_similarity = 0.0
                     
-                    # Check RGB similarity
+                    # Check Lab color space similarity using CIEDE2000 (most accurate)
                     for team_color in team_info["colors"]:
-                        # Calculate Euclidean distance
-                        distance = np.linalg.norm(np.array(color) - np.array(team_color))
-                        max_distance = np.sqrt(3 * 255**2)  # Maximum possible distance
-                        rgb_similarity = 1 - (distance / max_distance)
+                        # Calculate Lab color space similarity using CIEDE2000
+                        lab_similarity = self.calculate_lab_similarity(color, team_color)
                         
-                        # Check HSV similarity
+                        # Check HSV similarity as backup
                         hsv_similarity = self.calculate_hsv_similarity(color, team_info["hsv_range"])
                         
-                        # Combined similarity score (weighted average)
-                        combined_similarity = (rgb_similarity * 0.6) + (hsv_similarity * 0.4)
+                        # Combined similarity score (weighted: 70% Lab/CIEDE2000, 30% HSV)
+                        combined_similarity = (lab_similarity * 0.7) + (hsv_similarity * 0.3)
                         
                         if combined_similarity > best_similarity:
                             best_similarity = combined_similarity
