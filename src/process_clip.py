@@ -622,7 +622,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 border-radius: 8px;
                 margin-top: 20px;
             }}
-            .team-distribution, .confidence-analysis {{
+            .team-distribution, .confidence-analysis, .home-away-distribution {{
                 margin-bottom: 20px;
             }}
             .team-stats, .confidence-stats {{
@@ -708,6 +708,19 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                                     <div class="team-stat">
                                         <span class="team-label">Unknown:</span>
                                         <span id="unknownCount">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="home-away-distribution">
+                                <h4>Home/Away Distribution:</h4>
+                                <div class="team-stats">
+                                    <div class="team-stat">
+                                        <span class="team-label">Home:</span>
+                                        <span id="homeCount">-</span>
+                                    </div>
+                                    <div class="team-stat">
+                                        <span class="team-label">Away:</span>
+                                        <span id="awayCount">-</span>
                                     </div>
                                 </div>
                             </div>
@@ -807,20 +820,24 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 
                 if (frameData.players) {{
                     frameData.players.forEach(player => {{
-                        if (player.rink_position) {{
+                        // Only show markers for actual players, not pucks, goals, etc.
+                        if (player.rink_position && player.type && player.type.toLowerCase() === 'player') {{
+                            const rx = player.rink_position.x;
+                            const ry = player.rink_position.y;
+
                             const marker = document.createElement('div');
                             marker.className = 'player-marker';
-                            marker.style.left = `${{player.rink_position.x}}px`;
-                            marker.style.top = `${{player.rink_position.y}}px`;
-                            
+                            marker.style.left = `${{rx}}px`;
+                            marker.style.top = `${{ry}}px`;
+
                             const label = document.createElement('div');
                             label.className = 'player-label';
                             label.textContent = `${{player.player_id}} (${{player.speed_ma}} km/h)`;
-                            
+
                             playerMarkers.appendChild(marker);
                             playerMarkers.appendChild(label);
-                            label.style.left = `${{player.rink_position.x}}px`;
-                            label.style.top = `${{player.rink_position.y}}px`;
+                            label.style.left = `${{rx}}px`;
+                            label.style.top = `${{ry}}px`;
                         }}
                     }});
                 }}
@@ -831,16 +848,18 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 if (!frameData || !frameData.players) return;
 
                 const tbody = document.querySelector('.metrics-table tbody');
-                tbody.innerHTML = frameData.players.map(player => {{
-                    return `
-                        <tr>
-                            <td>${{player.player_id}}</td>
-                            <td>${{player.speed_ma}} km/h</td>
-                            <td>${{player.acceleration_ma}} m/s²</td>
-                            <td>${{player.orientation_ma}}°</td>
-                        </tr>
-                    `;
-                }}).join('');
+                tbody.innerHTML = frameData.players
+                    .filter(player => player.type && player.type.toLowerCase() === 'player')
+                    .map(player => {{
+                        return `
+                            <tr>
+                                <td>${{player.player_id}}</td>
+                                <td>${{player.speed_ma}} km/h</td>
+                                <td>${{player.acceleration_ma}} m/s²</td>
+                                <td>${{player.orientation_ma}}°</td>
+                            </tr>
+                        `;
+                    }}).join('');
             }}
             
             function updateTeamDetection(frameNum) {{
@@ -851,27 +870,39 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 let teamACount = 0;
                 let teamBCount = 0;
                 let unknownCount = 0;
+                let homeCount = 0;
+                let awayCount = 0;
                 let highConfidence = 0;
                 let mediumConfidence = 0;
                 let lowConfidence = 0;
 
-                frameData.players.forEach(player => {{
-                    const team = player.team || 'Unknown';
-                    const confidence = player.team_confidence || 0;
-                    
-                    if (team.includes('Team A')) teamACount++;
-                    else if (team.includes('Team B')) teamBCount++;
-                    else unknownCount++;
-                    
-                    if (confidence > 0.8) highConfidence++;
-                    else if (confidence > 0.6) mediumConfidence++;
-                    else if (confidence > 0.4) lowConfidence++;
-                }});
+                frameData.players
+                    .filter(player => player.type && player.type.toLowerCase() === 'player')
+                    .forEach(player => {{
+                        const team = player.team || 'Unknown';
+                        const confidence = player.team_confidence || 0;
+                        
+                        if (team.includes('Team A')) teamACount++;
+                        else if (team.includes('Team B')) teamBCount++;
+                        else unknownCount++;
+                        
+                        // Count home/away based on team names
+                        if (team.toLowerCase().includes('home')) homeCount++;
+                        else if (team.toLowerCase().includes('away')) awayCount++;
+                        
+                        if (confidence > 0.8) highConfidence++;
+                        else if (confidence > 0.6) mediumConfidence++;
+                        else if (confidence > 0.4) lowConfidence++;
+                    }});
 
                 // Update team distribution
                 document.getElementById('teamACount').textContent = teamACount;
                 document.getElementById('teamBCount').textContent = teamBCount;
                 document.getElementById('unknownCount').textContent = unknownCount;
+                
+                // Update home/away counts
+                document.getElementById('homeCount').textContent = homeCount;
+                document.getElementById('awayCount').textContent = awayCount;
                 
                 // Update confidence analysis
                 document.getElementById('highConfidenceCount').textContent = highConfidence;
@@ -880,20 +911,22 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
 
                 // Update team table
                 const teamTbody = document.getElementById('teamTableBody');
-                teamTbody.innerHTML = frameData.players.map(player => {{
-                    const team = player.team || 'Unknown';
-                    const confidence = player.team_confidence || 0;
-                    const method = player.team_detection_method || 'unknown';
-                    
-                    return `
-                        <tr>
-                            <td>${{player.player_id}}</td>
-                            <td>${{team}}</td>
-                            <td>${{(confidence * 100).toFixed(1)}}%</td>
-                            <td>${{method}}</td>
-                        </tr>
-                    `;
-                }}).join('');
+                teamTbody.innerHTML = frameData.players
+                    .filter(player => player.type && player.type.toLowerCase() === 'player')
+                    .map(player => {{
+                        const team = player.team || 'Unknown';
+                        const confidence = player.team_confidence || 0;
+                        const method = player.team_detection_method || 'unknown';
+                        
+                        return `
+                            <tr>
+                                <td>${{player.player_id}}</td>
+                                <td>${{team}}</td>
+                                <td>${{(confidence * 100).toFixed(1)}}%</td>
+                                <td>${{method}}</td>
+                            </tr>
+                        `;
+                    }}).join('');
             }}
 
             function updateFrame(frameNum) {{
