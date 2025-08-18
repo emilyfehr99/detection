@@ -159,12 +159,12 @@ def process_clip(
     rink_coordinates_path: Optional[str] = None,
     rink_image_path: Optional[str] = None,
     start_second: float = 0.0,
-    num_seconds: float = 5.0,
-    frame_step: int = 5,
-    max_frames: int = 60,
+    num_seconds: float = 0.0,
+    frame_step: int = 1,
+    max_frames: int = 0,
 ):
     """
-    Process a short clip from a video to test the player tracking system.
+    Process a video for player tracking system analysis.
     
     Args:
         video_path: Path to the input video
@@ -175,9 +175,9 @@ def process_clip(
         rink_coordinates_path: Optional path to the rink coordinates JSON
         rink_image_path: Optional path to the rink image for visualization
         start_second: Time in seconds to start processing from
-        num_seconds: Number of seconds to process
-        frame_step: Process every nth frame
-        max_frames: Maximum number of frames to process
+        num_seconds: Number of seconds to process (0 = entire video)
+        frame_step: Process every nth frame (1 = every frame)
+        max_frames: Maximum number of frames to process (0 = no limit)
     """
     # Create output directory if it doesn't exist
     if not os.path.exists(output_dir):
@@ -410,7 +410,7 @@ def process_clip(
             processed_frames_info.append(frame_info)
             frames_processed += 1
             
-            if frames_processed >= max_frames_to_process:
+            if max_frames_to_process > 0 and frames_processed >= max_frames_to_process:
                 break
         
         frame_idx += 1
@@ -460,13 +460,13 @@ def process_clip(
     
     # Create HTML visualization if rink image is provided
     if rink_image is not None:
-        create_html_visualization(processed_frames_info, output_dir, rink_image_path)
+        create_html_visualization(processed_frames_info, output_dir, rink_image_path, fps)
         print(f"\nHTML visualization created at {os.path.join(output_dir, 'visualization.html')}")
     
     return processed_frames_info
 
 
-def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_image_path: Optional[str] = None) -> str:
+def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_image_path: Optional[str] = None, video_fps: float = 30.0) -> str:
     """
     Create an HTML visualization of the processed frames.
     
@@ -474,6 +474,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
         frames_info: List of frame data dictionaries
         output_dir: Directory to save output files
         rink_image_path: Optional path to the rink image
+        video_fps: Video frames per second for real-time playback
         
     Returns:
         Path to the generated HTML file
@@ -487,7 +488,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Player Tracking Visualization</title>
+        <title>Player Tracking Visualization - Real-time Playback</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -567,6 +568,19 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 display: flex;
                 gap: 10px;
                 margin: 10px 0;
+            }}
+            .video-info {{
+                background: #f8f9fa;
+                padding: 10px 15px;
+                border-radius: 6px;
+                border: 1px solid #dee2e6;
+                margin-bottom: 15px;
+                text-align: center;
+            }}
+            .video-info p {{
+                margin: 0;
+                color: #495057;
+                font-size: 14px;
             }}
             .control-button {{
                 padding: 5px 15px;
@@ -653,6 +667,9 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
     <body>
         <div class="container">
             <div class="main-panel">
+                <div class="video-info">
+                    <p><strong>Video FPS:</strong> {video_fps:.1f} | <strong>Playback Speed:</strong> Real-time</p>
+                </div>
                 <div class="tabs">
                     <button class="tab active" data-tab="original">Original Frame</button>
                     <button class="tab" data-tab="detections">Player Detections</button>
@@ -907,7 +924,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     playInterval = setInterval(() => {{
                         const newFrame = (parseInt(frameSlider.value) + 1) % framesData.length;
                         updateFrame(newFrame);
-                    }}, 100); // 10 fps playback
+                    }}, {int(1000 / video_fps)}); // Real-time playback ({video_fps:.1f} fps)
                     button.textContent = '⏸';
                 }}
                 isPlaying = !isPlaying;
@@ -935,7 +952,7 @@ def main():
     """
     Main function to parse arguments and process clip.
     """
-    parser = argparse.ArgumentParser(description="Process a short clip from hockey broadcast footage to test player tracking")
+    parser = argparse.ArgumentParser(description="Process hockey video for player tracking and analysis")
     
     parser.add_argument("--video", type=str, required=True, help="Path to input video")
     parser.add_argument("--detection-model", type=str, required=True, help="Path to detection model")
@@ -945,9 +962,9 @@ def main():
     parser.add_argument("--rink-coordinates", type=str, help="Path to rink coordinates JSON")
     parser.add_argument("--rink-image", type=str, help="Path to rink image")
     parser.add_argument("--start-second", type=float, default=0.0, help="Time in seconds to start processing from")
-    parser.add_argument("--num-seconds", type=float, default=5.0, help="Number of seconds to process")
-    parser.add_argument("--frame-step", type=int, default=5, help="Process every nth frame")
-    parser.add_argument("--max-frames", type=int, default=60, help="Maximum number of frames to process")
+    parser.add_argument("--num-seconds", type=float, default=0.0, help="Number of seconds to process (0 = entire video)")
+    parser.add_argument("--frame-step", type=int, default=1, help="Process every nth frame (1 = every frame)")
+    parser.add_argument("--max-frames", type=int, default=0, help="Maximum number of frames to process (0 = no limit)")
     
     args = parser.parse_args()
     

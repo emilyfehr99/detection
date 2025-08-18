@@ -3,18 +3,7 @@
 # Hockey Player Tracking Run Script
 # This script simplifies running the player tracking system on a video clip
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --max_frames)
-      MAX_FRAMES="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
-  esac
-done
+# No command line arguments needed - process entire video
 
 # Default values
 VIDEO_PATH="data/videos/CAN-SWE.mp4"
@@ -26,8 +15,7 @@ RINK_IMAGE="data/rink_resized.png"
 OUTPUT_DIR="output/tracking_results_$(date +%Y%m%d_%H%M%S)"
 START_SECOND=0
 NUM_SECONDS=0  # 0 means process entire video
-FRAME_STEP=1
-MAX_FRAMES=${MAX_FRAMES:-50}  # Default to 50 frames
+FRAME_STEP=1  # Process every frame for smooth video playback
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
@@ -40,8 +28,8 @@ python3 src/resize_rink_image.py \
   --width 1400 \
   --height 600
 
-# Run the player tracking on a clip
-echo "Running player tracking on clip..."
+# Run the player tracking on the entire video
+echo "Running player tracking on entire video..."
 python3 src/process_clip.py \
   --video $VIDEO_PATH \
   --segmentation-model $SEGMENTATION_MODEL \
@@ -52,8 +40,7 @@ python3 src/process_clip.py \
   --output-dir $OUTPUT_DIR \
   --start-second $START_SECOND \
   --num-seconds $NUM_SECONDS \
-  --frame-step $FRAME_STEP \
-  --max-frames $MAX_FRAMES
+  --frame-step $FRAME_STEP
 
 # Wait for the tracking data file to be created and get its name
 TRACKING_DATA=$(ls $OUTPUT_DIR/player_detection_data_*.json | head -n 1)
