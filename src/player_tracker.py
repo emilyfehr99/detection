@@ -88,9 +88,116 @@ class PlayerTracker:
         # Initialize tracking data
         self.tracking_data = {}
         
+        # Initialize player tracking across frames
+        self.next_player_id = 0
+        self.player_tracks = {}  # Maps player_id to track info
+        self.frame_player_matches = {}  # Maps frame_id to player_id mappings
+        
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+    def track_player_across_frames(self, detection: Dict, frame_id: int) -> str:
+        """
+        Track a player across frames and assign consistent ID.
+        
+        Args:
+            detection: Player detection data
+            frame_id: Current frame ID
+            
+        Returns:
+            Consistent player ID across frames
+        """
+        if frame_id == 0:
+            # First frame: assign new ID
+            player_id = f"player_{self.next_player_id}"
+            self.next_player_id += 1
+            
+            # Initialize track
+            self.player_tracks[player_id] = {
+                "first_frame": frame_id,
+                "last_frame": frame_id,
+                "bbox_history": [detection["bbox"]],
+                "roboflow_class": detection.get("roboflow_class", "unknown")
+            }
+            
+            return player_id
+        
+        # Find the best matching player from previous frame
+        best_match_id = None
+        best_match_score = 0.5  # Minimum threshold for matching
+        
+        if frame_id - 1 in self.frame_player_matches:
+            prev_matches = self.frame_player_matches[frame_id - 1]
+            
+            for prev_player_id, prev_player_data in prev_matches.items():
+                if prev_player_id not in self.player_tracks:
+                    continue
+                
+                # Calculate similarity score based on position and class
+                score = self._calculate_player_similarity(detection, prev_player_data)
+                
+                if score > best_match_score:
+                    best_match_score = score
+                    best_match_id = prev_player_id
+        
+        if best_match_id:
+            # Update existing track
+            self.player_tracks[best_match_id]["last_frame"] = frame_id
+            self.player_tracks[best_match_id]["bbox_history"].append(detection["bbox"])
+            return best_match_id
+        else:
+            # New player: assign new ID
+            player_id = f"player_{self.next_player_id}"
+            self.next_player_id += 1
+            
+            # Initialize track
+            self.player_tracks[player_id] = {
+                "first_frame": frame_id,
+                "last_frame": frame_id,
+                "bbox_history": [detection["bbox"]],
+                "roboflow_class": detection.get("roboflow_class", "unknown")
+            }
+            
+            return player_id
+    
+    def _calculate_player_similarity(self, detection1: Dict, detection2: Dict) -> float:
+        """
+        Calculate similarity score between two player detections.
+        
+        Args:
+            detection1: First detection
+            detection2: Second detection
+            
+        Returns:
+            Similarity score (0.0 to 1.0)
+        """
+        # Position similarity (using bounding box center)
+        bbox1 = detection1["bbox"]
+        bbox2 = detection2["bbox"]
+        
+        center1_x = (bbox1[0] + bbox1[2]) / 2
+        center1_y = (bbox1[1] + bbox1[3]) / 2
+        center2_x = (bbox2[0] + bbox2[2]) / 2
+        center2_y = (bbox2[1] + bbox2[3]) / 2
+        
+        # Calculate Euclidean distance
+        distance = np.sqrt((center1_x - center2_x)**2 + (center1_y - center2_y)**2)
+        
+        # Convert distance to similarity score (closer = higher score)
+        # Assuming reasonable movement between frames (e.g., max 100 pixels)
+        max_distance = 100.0
+        position_score = max(0, 1.0 - (distance / max_distance))
+        
+        # Class similarity (same Roboflow class = higher score)
+        class1 = detection1.get("roboflow_class", "unknown")
+        class2 = detection2.get("roboflow_class", "unknown")
+        class_score = 1.0 if class1 == class2 else 0.5
+        
+        # Combined score (weighted average)
+        final_score = 0.7 * position_score + 0.3 * class_score
+        
+        return final_score
+    
     def calculate_player_metrics(self, current_player: Dict, frame_id: int, prev_frame_data: Optional[Dict] = None) -> Dict:
         """
         Calculate metrics for a player based on current and previous positions.
@@ -208,12 +315,16 @@ class PlayerTracker:
             
             # Step 3: Process each detection
             for i, detection in enumerate(detections):
+                # Track player across frames and assign consistent ID
+                player_id = self.track_player_across_frames(detection, frame_id)
+                
                 player_data = {
-                    "player_id": f"{frame_id}_{i}",  # Temporary ID
+                    "player_id": player_id,  # Consistent ID across frames
                     "type": detection["class"],
                     "bbox": detection["bbox"],
                     "confidence": detection["confidence"],
-                    "reference_point": detection["reference_point"]
+                    "reference_point": detection["reference_point"],
+                    "roboflow_class": detection.get("roboflow_class", "unknown")  # Include Roboflow class
                 }
                 
                 # Project player position to rink coordinates if homography available
@@ -245,6 +356,12 @@ class PlayerTracker:
                     player_data["team_detection_method"] = "unknown"
                 
                 frame_data["players"].append(player_data)
+        
+        # Store frame player matches for tracking
+        self.frame_player_matches[frame_id] = {
+            player_data["player_id"]: player_data 
+            for player_data in frame_data["players"]
+        }
         
         # Store frame data for next frame's calculations
         self.tracking_data[frame_id] = frame_data

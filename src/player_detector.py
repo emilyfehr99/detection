@@ -157,11 +157,13 @@ class PlayerDetector:
                             class_id = pred.get("class_id", 0)
                             
                             # Map Roboflow classes to expected format and filter for specific classes
-                            target_classes = ["player", "puck", "stick_blade", "goalkeeper", "goalie", "goalzone"]
+                            target_classes = ["player", "puck", "stick_blade", "goalkeeper", "goalie", "goalzone", "home", "away"]
                             if class_name.lower() in target_classes:
                                 # Normalize goalkeeper/goalie naming
                                 if class_name.lower() in ["goalkeeper", "goalie"]:
                                     mapped_class = "goalkeeper"
+                                elif class_name.lower() in ["home", "away"]:
+                                    mapped_class = "player"  # Map home/away to player for processing
                                 else:
                                     mapped_class = class_name.lower()
                             else:
@@ -176,6 +178,7 @@ class PlayerDetector:
                                 "bbox": (x1, y1, x2, y2),
                                 "confidence": confidence,
                                 "class": mapped_class,
+                                "roboflow_class": class_name,  # Keep original Roboflow class
                                 "reference_point": {
                                     "x": float(ref_x),  # Ensure coordinates are float
                                     "y": float(ref_y),
@@ -192,6 +195,9 @@ class PlayerDetector:
                 # Clean up temporary file
                 if os.path.exists(temp_path):
                     os.unlink(temp_path)
+            
+            # Remove duplicate detections within the same frame
+            detections = self._remove_duplicate_detections(detections)
             
             # Visualize detections on frame
             vis_frame = self.visualize_detections(frame, detections)
@@ -217,6 +223,71 @@ class PlayerDetector:
             traceback.print_exc()
             cv2.destroyAllWindows()  # Clean up windows on error
             return []
+    
+    def _remove_duplicate_detections(self, detections: List[Dict]) -> List[Dict]:
+        """
+        Remove duplicate detections within the same frame based on overlapping bounding boxes.
+        
+        Args:
+            detections: List of detection dictionaries
+            
+        Returns:
+            List of deduplicated detections
+        """
+        if len(detections) <= 1:
+            return detections
+        
+        # Sort detections by confidence (highest first)
+        sorted_detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
+        
+        # Keep track of which detections to remove
+        to_remove = set()
+        
+        for i, det1 in enumerate(sorted_detections):
+            if i in to_remove:
+                continue
+                
+            bbox1 = det1["bbox"]
+            center1_x = (bbox1[0] + bbox1[2]) / 2
+            center1_y = (bbox1[1] + bbox1[3]) / 2
+            
+            for j, det2 in enumerate(sorted_detections[i+1:], i+1):
+                if j in to_remove:
+                    continue
+                    
+                bbox2 = det2["bbox"]
+                center2_x = (bbox2[0] + bbox2[2]) / 2
+                center2_y = (bbox2[1] + bbox2[3]) / 2
+                
+                # Calculate distance between centers
+                distance = np.sqrt((center1_x - center2_x)**2 + (center1_y - center2_y)**2)
+                
+                # Calculate overlap area
+                x1_overlap = max(bbox1[0], bbox2[0])
+                y1_overlap = max(bbox1[1], bbox2[1])
+                x2_overlap = min(bbox1[2], bbox2[2])
+                y2_overlap = min(bbox1[3], bbox2[3])
+                
+                if x2_overlap > x1_overlap and y2_overlap > y1_overlap:
+                    overlap_area = (x2_overlap - x1_overlap) * (y2_overlap - y1_overlap)
+                    bbox1_area = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+                    bbox2_area = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+                    
+                    # Calculate intersection over union (IoU)
+                    union_area = bbox1_area + bbox2_area - overlap_area
+                    iou = overlap_area / union_area if union_area > 0 else 0
+                    
+                    # If IoU > 0.3 or centers are very close (< 50 pixels), consider it a duplicate
+                    if iou > 0.3 or distance < 50:
+                        # Keep the one with higher confidence, remove the other
+                        if det1["confidence"] >= det2["confidence"]:
+                            to_remove.add(j)
+                        else:
+                            to_remove.add(i)
+                            break  # Current detection was removed, move to next
+        
+        # Return only the detections that weren't marked for removal
+        return [det for i, det in enumerate(sorted_detections) if i not in to_remove]
     
     def get_player_crops(self, frame: np.ndarray, detections: List[Dict]) -> Dict[int, np.ndarray]:
         """

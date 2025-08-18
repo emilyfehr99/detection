@@ -32,10 +32,13 @@ def calculate_player_metrics(frames_info: List[Dict], fps: float = 30.0) -> List
         for player in frame_data['players']:
             player_id = player['player_id']
             
-            # Initialize metrics
-            player['speed'] = 0.0
-            player['acceleration'] = 0.0
-            player['orientation'] = 0.0
+            # Initialize metrics (preserve existing fields)
+            if 'speed' not in player:
+                player['speed'] = 0.0
+            if 'acceleration' not in player:
+                player['acceleration'] = 0.0
+            if 'orientation' not in player:
+                player['orientation'] = 0.0
             
             # Skip if no rink position
             if not player.get('rink_position'):
@@ -270,8 +273,14 @@ def process_clip(
                     if last_player and "rink_position" in player and "rink_position" in last_player:
                         # Calculate speed (pixels per second)
                         dt = 1.0 / fps
-                        dx = player["rink_position"][0] - last_player["rink_position"][0]
-                        dy = player["rink_position"][1] - last_player["rink_position"][1]
+                        # Handle both tuple and dictionary formats for rink_position
+                        if isinstance(player["rink_position"], dict):
+                            dx = player["rink_position"]["x"] - last_player["rink_position"]["x"]
+                            dy = player["rink_position"]["y"] - last_player["rink_position"]["y"]
+                        else:
+                            # Fallback for tuple format
+                            dx = player["rink_position"][0] - last_player["rink_position"][0]
+                            dy = player["rink_position"][1] - last_player["rink_position"][1]
                         speed = math.sqrt(dx * dx + dy * dy) / dt
                         player["speed"] = speed
                         
@@ -371,7 +380,8 @@ def process_clip(
                         "orientation_ma": p.get("orientation_ma", 0.0),
                         "team": p.get("team", "Unknown"),
                         "team_confidence": p.get("team_confidence", 0.0),
-                        "team_detection_method": p.get("team_detection_method", "unknown")
+                        "team_detection_method": p.get("team_detection_method", "unknown"),
+                        "roboflow_class": p.get("roboflow_class", "unknown")
                     } for p in frame_data["players"]
                 ],
                 "homography_success": frame_data.get("homography_success", False),
@@ -712,14 +722,14 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                                 </div>
                             </div>
                             <div class="home-away-distribution">
-                                <h4>Home/Away Distribution:</h4>
+                                <h4>Team Distribution (Home/Away):</h4>
                                 <div class="team-stats">
                                     <div class="team-stat">
-                                        <span class="team-label">Home:</span>
+                                        <span class="team-label">Team A (Home):</span>
                                         <span id="homeCount">-</span>
                                     </div>
                                     <div class="team-stat">
-                                        <span class="team-label">Away:</span>
+                                        <span class="team-label">Team B (Away):</span>
                                         <span id="awayCount">-</span>
                                     </div>
                                 </div>
@@ -743,18 +753,19 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                             </div>
                             <div class="team-table-container">
                                 <h4>Player Team Assignments:</h4>
-                                <table class="team-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Player ID</th>
-                                            <th>Team</th>
-                                            <th>Confidence</th>
-                                            <th>Method</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="teamTableBody">
-                                    </tbody>
-                                </table>
+                                            <table class="team-table">
+                <thead>
+                    <tr>
+                        <th>Player ID</th>
+                        <th>Roboflow Class</th>
+                        <th>Team</th>
+                        <th>Confidence</th>
+                        <th>Method</th>
+                    </tr>
+                </thead>
+                <tbody id="teamTableBody">
+                </tbody>
+            </table>
                             </div>
                         </div>
                     </div>
@@ -886,9 +897,9 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                         else if (team.includes('Team B')) teamBCount++;
                         else unknownCount++;
                         
-                        // Count home/away based on team names
-                        if (team.toLowerCase().includes('home')) homeCount++;
-                        else if (team.toLowerCase().includes('away')) awayCount++;
+                                                    // Count home/away based on team names
+                            if (team.toLowerCase().includes('team a')) homeCount++;
+                            else if (team.toLowerCase().includes('team b')) awayCount++;
                         
                         if (confidence > 0.8) highConfidence++;
                         else if (confidence > 0.6) mediumConfidence++;
@@ -917,10 +928,12 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                         const team = player.team || 'Unknown';
                         const confidence = player.team_confidence || 0;
                         const method = player.team_detection_method || 'unknown';
+                        const roboflowClass = player.roboflow_class || 'unknown';
                         
                         return `
                             <tr>
                                 <td>${{player.player_id}}</td>
+                                <td>${{roboflowClass}}</td>
                                 <td>${{team}}</td>
                                 <td>${{(confidence * 100).toFixed(1)}}%</td>
                                 <td>${{method}}</td>
