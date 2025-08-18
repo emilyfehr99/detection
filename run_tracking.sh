@@ -6,7 +6,7 @@
 # No command line arguments needed - process entire video
 
 # Default values
-VIDEO_PATH="data/videos/CAN-SWE.mp4"
+VIDEO_PATH="data/videos/PIT_vs_CHI_2016_2.mp4"
 SEGMENTATION_MODEL="models/segmentation.pt"
 DETECTION_MODEL="models/detection.pt"
 ORIENTATION_MODEL="models/orient.pth"
@@ -16,6 +16,7 @@ OUTPUT_DIR="output/tracking_results_$(date +%Y%m%d_%H%M%S)"
 START_SECOND=0
 NUM_SECONDS=0  # 0 means process entire video
 FRAME_STEP=1  # Process every frame for smooth video playback
+MAX_FRAMES=100  # Limit to 100 frames
 
 # Create output directory
 mkdir -p $OUTPUT_DIR
@@ -31,16 +32,17 @@ python3 src/resize_rink_image.py \
 # Run the player tracking on the entire video
 echo "Running player tracking on entire video..."
 python3 src/process_clip.py \
-  --video $VIDEO_PATH \
-  --segmentation-model $SEGMENTATION_MODEL \
-  --detection-model $DETECTION_MODEL \
-  --orientation-model $ORIENTATION_MODEL \
-  --rink-coordinates $RINK_COORDINATES \
-  --rink-image $RINK_IMAGE \
-  --output-dir $OUTPUT_DIR \
+  --video "$VIDEO_PATH" \
+  --segmentation-model "$SEGMENTATION_MODEL" \
+  --detection-model "$DETECTION_MODEL" \
+  --orientation-model "$ORIENTATION_MODEL" \
+  --rink-coordinates "$RINK_COORDINATES" \
+  --rink-image "$RINK_IMAGE" \
+  --output-dir "$OUTPUT_DIR" \
   --start-second $START_SECOND \
   --num-seconds $NUM_SECONDS \
-  --frame-step $FRAME_STEP
+  --frame-step $FRAME_STEP \
+  --max-frames $MAX_FRAMES
 
 # Wait for the tracking data file to be created and get its name
 TRACKING_DATA=$(ls $OUTPUT_DIR/player_detection_data_*.json | head -n 1)
