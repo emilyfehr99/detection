@@ -381,7 +381,8 @@ def process_clip(
                         "team": p.get("team", "Unknown"),
                         "team_confidence": p.get("team_confidence", 0.0),
                         "team_detection_method": p.get("team_detection_method", "unknown"),
-                        "roboflow_class": p.get("roboflow_class", "unknown")
+                        "roboflow_class": p.get("roboflow_class", "unknown"),
+                        "pose_landmarks": p.get("pose_landmarks", None)
                     } for p in frame_data["players"]
                 ],
                 "homography_success": frame_data.get("homography_success", False),
@@ -490,6 +491,15 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
         Path to the generated HTML file
     """
     html_path = os.path.join(output_dir, "visualization.html")
+
+    # Ensure skeleton.js is available next to the HTML for browser loading
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        src_js = os.path.join(current_dir, "skeleton.js")
+        if os.path.exists(src_js):
+            shutil.copy2(src_js, os.path.join(output_dir, "skeleton.js"))
+    except Exception:
+        pass
     
     # Convert frames_info to JSON string
     frames_data_json = json.dumps(frames_info, cls=NumpyEncoder)
@@ -570,6 +580,14 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             .frame-image {{
                 max-width: 100%;
                 height: auto;
+            }}
+            .skeleton-overlay {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
             }}
             #frameSlider {{
                 flex-grow: 1;
@@ -684,6 +702,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     <button class="tab active" data-tab="original">Original Frame</button>
                     <button class="tab" data-tab="detections">Player Detections</button>
                     <button class="tab" data-tab="tracking">Player Tracking</button>
+                    <button class="tab" data-tab="skeleton">Skeleton</button>
                     <button class="tab" data-tab="team_detection">Team Detection</button>
                 </div>
                 
@@ -697,6 +716,17 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     <div id="trackingContainer" style="width: 1400px; height: 600px; position: relative;">
                         <img id="rinkImage" src="rink_resized.png" style="width: 100%; height: 100%; position: absolute; top: 0; left: 0;">
                         <div id="playerMarkers"></div>
+                    </div>
+                </div>
+                <div id="skeleton" class="tab-content">
+                    <div class="controls" style="margin: 0 0 10px 0;">
+                        <label for="playerSelect">Select Player:</label>
+                        <select id="playerSelect"></select>
+                        <button class="control-button" id="skeletonGo">Go</button>
+                    </div>
+                    <div id="skeletonContainer" style="position: relative; display: inline-block;">
+                        <img id="skeletonFrame" class="frame-image" src="" alt="Skeleton frame">
+                        <canvas id="skeletonCanvas" class="skeleton-overlay"></canvas>
                     </div>
                 </div>
                 
@@ -799,6 +829,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 </div>
             </div>
         </div>
+        <script src="skeleton.js"></script>
         <script>
             const framesData = {frames_data_json};
             const frameSlider = document.getElementById('frameSlider');
@@ -822,8 +853,20 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 if (!frameData) return;
 
                 // Update frame images
-                document.getElementById('originalFrame').src = frameData.original_frame_path;
+                const originalImg = document.getElementById('originalFrame');
+                originalImg.src = frameData.original_frame_path;
+                const skeletonImg = document.getElementById('skeletonFrame');
+                if (skeletonImg) {{ skeletonImg.src = frameData.original_frame_path; }}
                 document.getElementById('detectionsFrame').src = frameData.detections_path || '';
+                // After image loads, draw skeleton
+                if (typeof drawSkeletonForSelectedPlayer === 'function' && skeletonImg) {{
+                    const redraw = () => drawSkeletonForSelectedPlayer(frameNum);
+                    if (skeletonImg.complete) {{
+                        redraw();
+                    }} else {{
+                        skeletonImg.onload = redraw;
+                    }}
+                }}
                 
                 // Update player markers
                 const playerMarkers = document.getElementById('playerMarkers');
@@ -945,6 +988,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             function updateFrame(frameNum) {{
                 frameSlider.value = frameNum;
                 frameNumber.textContent = `Frame: ${{frameNum}}`;
+                if (typeof updatePlayerSelect === 'function') updatePlayerSelect(frameNum);
                 updateFrameImages(frameNum);
                 updateMetricsTable(frameNum);
                 updateTeamDetection(frameNum);
@@ -983,6 +1027,16 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             
             // Initialize with first frame
             updateFrame(0);
+            const playerSelect = document.getElementById('playerSelect');
+            if (playerSelect && typeof drawSkeletonForSelectedPlayer === 'function') {{
+                playerSelect.addEventListener('change', () => {{
+                    drawSkeletonForSelectedPlayer(parseInt(frameSlider.value));
+                }});
+            }}
+            // Ensure selector is initially populated
+            if (typeof updatePlayerSelect === 'function') {{
+                updatePlayerSelect(0);
+            }}
         </script>
     </body>
     </html>

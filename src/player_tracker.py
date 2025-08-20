@@ -6,6 +6,10 @@ from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime
 import logging
 import time
+try:
+    import mediapipe as mp  # type: ignore
+except Exception:
+    mp = None
 
 from segmentation_processor import SegmentationProcessor
 from player_detector import PlayerDetector
@@ -95,6 +99,19 @@ class PlayerTracker:
         
         # Initialize logger
         self.logger = logging.getLogger(__name__)
+
+        # Initialize pose estimator if available
+        self.pose_estimator = None
+        if mp is not None:
+            try:
+                self.pose_estimator = mp.solutions.pose.Pose(
+                    static_image_mode=False,
+                    model_complexity=1,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize MediaPipe Pose: {e}")
         
     def track_player_across_frames(self, detection: Dict, frame_id: int) -> str:
         """
@@ -330,10 +347,10 @@ class PlayerTracker:
                 # Project player position to rink coordinates if homography available
                 if frame_data.get("homography_success", False):
                     try:
-                        rink_pos = self.homography_calculator.project_point_to_rink(
-                            (detection["reference_point"]["x"], detection["reference_point"]["y"]),
-                            frame_data["homography_matrix"]
-                        )
+                        ref = detection["reference_point"]
+                        px = ref.get("pixel_x", ref.get("x"))
+                        py = ref.get("pixel_y", ref.get("y"))
+                        rink_pos = self.homography_calculator.project_point_to_rink((px, py), frame_data["homography_matrix"])
                         if rink_pos:
                             player_data["rink_position"] = rink_pos
                             
@@ -354,6 +371,32 @@ class PlayerTracker:
                     player_data["team"] = "Unknown"
                     player_data["team_confidence"] = 0.0
                     player_data["team_detection_method"] = "unknown"
+
+                # Extract pose landmarks for players if pose estimator is available
+                try:
+                    if self.pose_estimator is not None and str(player_data.get("type", "")).lower() == "player":
+                        bbox = player_data["bbox"]
+                        x1, y1, x2, y2 = map(int, bbox)
+                        if (x2 - x1) > 2 and (y2 - y1) > 2:
+                            crop = frame[max(0, y1):max(0, y2), max(0, x1):max(0, x2)]
+                            if crop.size > 0:
+                                rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                result = self.pose_estimator.process(rgb)
+                                if result and getattr(result, "pose_landmarks", None):
+                                    landmarks = []
+                                    h, w = crop.shape[:2]
+                                    for idx, lm in enumerate(result.pose_landmarks.landmark):
+                                        px = x1 + int(lm.x * w)
+                                        py = y1 + int(lm.y * h)
+                                        landmarks.append({
+                                            "index": idx,
+                                            "x": px,
+                                            "y": py,
+                                            "visibility": float(lm.visibility)
+                                        })
+                                    player_data["pose_landmarks"] = landmarks
+                except Exception as e:
+                    self.logger.warning(f"Pose estimation failed for {player_id}: {e}")
                 
                 frame_data["players"].append(player_data)
         
