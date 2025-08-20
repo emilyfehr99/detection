@@ -53,19 +53,31 @@ function drawSkeletonForSelectedPlayer(frameNum) {
   const scaleY = rect.height / natH;
 
   const C = { NOSE:0, LEFT_SHOULDER:11, RIGHT_SHOULDER:12, LEFT_ELBOW:13, RIGHT_ELBOW:14, LEFT_WRIST:15, RIGHT_WRIST:16, LEFT_HIP:23, RIGHT_HIP:24, LEFT_KNEE:25, RIGHT_KNEE:26, LEFT_ANKLE:27, RIGHT_ANKLE:28, LEFT_HEEL:29, RIGHT_HEEL:30, LEFT_FOOT_INDEX:31, RIGHT_FOOT_INDEX:32 };
+  // Connections similar to MediaPipe POSE_CONNECTIONS (subset tailored for clarity)
   const pairs = [
+    // Torso
     [C.LEFT_SHOULDER, C.RIGHT_SHOULDER],
+    [C.LEFT_SHOULDER, C.LEFT_HIP],
+    [C.RIGHT_SHOULDER, C.RIGHT_HIP],
+    [C.LEFT_HIP, C.RIGHT_HIP],
+    // Arms
     [C.LEFT_SHOULDER, C.LEFT_ELBOW],
     [C.LEFT_ELBOW, C.LEFT_WRIST],
     [C.RIGHT_SHOULDER, C.RIGHT_ELBOW],
     [C.RIGHT_ELBOW, C.RIGHT_WRIST],
-    [C.LEFT_SHOULDER, C.LEFT_HIP],
-    [C.RIGHT_SHOULDER, C.RIGHT_HIP],
-    [C.LEFT_HIP, C.RIGHT_HIP],
+    // Head to shoulders
+    [C.NOSE, C.LEFT_SHOULDER],
+    [C.NOSE, C.RIGHT_SHOULDER],
+    // Legs
     [C.LEFT_HIP, C.LEFT_KNEE],
     [C.LEFT_KNEE, C.LEFT_ANKLE],
     [C.RIGHT_HIP, C.RIGHT_KNEE],
-    [C.RIGHT_KNEE, C.RIGHT_ANKLE]
+    [C.RIGHT_KNEE, C.RIGHT_ANKLE],
+    // Feet
+    [C.LEFT_ANKLE, C.LEFT_HEEL],
+    [C.RIGHT_ANKLE, C.RIGHT_HEEL],
+    [C.LEFT_ANKLE, C.LEFT_FOOT_INDEX],
+    [C.RIGHT_ANKLE, C.RIGHT_FOOT_INDEX]
   ];
 
   const pts = {};
