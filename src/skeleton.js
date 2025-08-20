@@ -37,14 +37,40 @@ function drawSkeletonForSelectedPlayer(frameNum) {
   const canvas = document.getElementById('skeletonCanvas');
   if (!frameData || !select || !img || !canvas) return;
   const playerId = select.value;
-  const player = (frameData.players || []).find(p => p.player_id === playerId);
-  const landmarks = player && player.pose_landmarks;
+  function findPlayerLandmarks(startIdx, pid, searchWindow = 5) {
+    const tryGet = (idx) => {
+      const fd = framesData[idx];
+      if (!fd) return null;
+      const p = (fd.players || []).find(pp => pp.player_id === pid);
+      if (p && Array.isArray(p.pose_landmarks)) return p.pose_landmarks;
+      return null;
+    };
+    let lm = tryGet(startIdx);
+    if (lm) return lm;
+    for (let d = 1; d <= searchWindow; d++) {
+      lm = tryGet(startIdx + d); if (lm) return lm;
+      lm = tryGet(startIdx - d); if (lm) return lm;
+    }
+    return null;
+  }
+  const landmarks = findPlayerLandmarks(frameNum, playerId, 5);
 
   const rect = img.getBoundingClientRect();
   canvas.width = rect.width;
   canvas.height = rect.height;
   const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Background like off_ice: white with light grid
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const grid = 50;
+  ctx.strokeStyle = '#c8c8c8';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < canvas.width; x += grid) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+  }
+  for (let y = 0; y < canvas.height; y += grid) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+  }
   if (!landmarks || !Array.isArray(landmarks)) return;
 
   const natW = img.naturalWidth || rect.width;
@@ -83,8 +109,9 @@ function drawSkeletonForSelectedPlayer(frameNum) {
   const pts = {};
   landmarks.forEach(lm => { pts[lm.index] = lm; });
 
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = '#00ff88';
+  // Bone styling closer to your example: thin yellow lines
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgb(255,255,0)';
 
   // Per-joint colors (RGB)
   const jointColors = {
@@ -110,7 +137,7 @@ function drawSkeletonForSelectedPlayer(frameNum) {
   // Draw joints
   for (const k in pts) {
     const p = pts[k];
-    if (p.visibility !== undefined && p.visibility < 0.3) continue;
+    if (p.visibility !== undefined && p.visibility < 0.5) continue;
     const jc = jointColors.hasOwnProperty(k*1) ? jointColors[k*1] : [0, 255, 136];
     ctx.fillStyle = `rgb(${jc[0]}, ${jc[1]}, ${jc[2]})`;
     ctx.beginPath();
@@ -122,7 +149,7 @@ function drawSkeletonForSelectedPlayer(frameNum) {
     const p1 = pts[a];
     const p2 = pts[b];
     if (!p1 || !p2) return;
-    if ((p1.visibility !== undefined && p1.visibility < 0.3) || (p2.visibility !== undefined && p2.visibility < 0.3)) return;
+    if ((p1.visibility !== undefined && p1.visibility < 0.5) || (p2.visibility !== undefined && p2.visibility < 0.5)) return;
     ctx.beginPath();
     ctx.moveTo(p1.x * scaleX, p1.y * scaleY);
     ctx.lineTo(p2.x * scaleX, p2.y * scaleY);
