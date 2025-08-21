@@ -42,6 +42,7 @@ function drawSkeletonForSelectedPlayer(frameNum) {
       const fd = framesData[idx];
       if (!fd) return null;
       const p = (fd.players || []).find(pp => pp.player_id === pid);
+      if (p && Array.isArray(p.pose_landmarks_3d)) return p.pose_landmarks_3d;
       if (p && Array.isArray(p.pose_landmarks)) return p.pose_landmarks;
       return null;
     };
@@ -54,6 +55,11 @@ function drawSkeletonForSelectedPlayer(frameNum) {
     return null;
   }
   const landmarks = findPlayerLandmarks(frameNum, playerId, 5);
+  
+  // Get pose quality score if available
+  const frameData = framesData[frameNum];
+  const player = frameData?.players?.find(p => p.player_id === playerId);
+  const poseQuality = player?.pose_quality_score || 0.0;
 
   const rect = img.getBoundingClientRect();
   canvas.width = rect.width;
@@ -107,7 +113,16 @@ function drawSkeletonForSelectedPlayer(frameNum) {
   ];
 
   const pts = {};
-  landmarks.forEach(lm => { pts[lm.index] = lm; });
+  landmarks.forEach(lm => { 
+    // Handle both old format (index) and new format (landmark_id)
+    const key = lm.landmark_id !== undefined ? lm.landmark_id : lm.index;
+    pts[key] = lm; 
+  });
+  
+  // Draw pose quality indicator
+  ctx.fillStyle = poseQuality > 0.7 ? '#00ff00' : poseQuality > 0.4 ? '#ffff00' : '#ff0000';
+  ctx.font = '12px Arial';
+  ctx.fillText(`Pose Quality: ${(poseQuality * 100).toFixed(0)}%`, 10, 20);
 
   // Bone styling closer to your example: thin yellow lines
   ctx.lineWidth = 1;

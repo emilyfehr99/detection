@@ -272,8 +272,18 @@ def process_clip(
                     last_player = next((p for p in last_frame["players"] if p["player_id"] == player["player_id"]), None)
                     if (last_player and "rink_position" in player and "rink_position" in last_player and 
                         player["rink_position"] is not None and last_player["rink_position"] is not None):
-                        # Calculate speed (pixels per second)
+                        # Calculate speed with real-world units
                         dt = 1.0 / fps
+                        
+                        # NHL rink dimensions (standard)
+                        RINK_WIDTH_METERS = 60.96  # 200 feet
+                        RINK_HEIGHT_METERS = 25.91  # 85 feet
+                        
+                        # Get rink image dimensions for conversion
+                        rink_height, rink_width = rink_image.shape[:2]
+                        pixels_per_meter_x = rink_width / RINK_WIDTH_METERS
+                        pixels_per_meter_y = rink_height / RINK_HEIGHT_METERS
+                        
                         # Handle both tuple and dictionary formats for rink_position
                         if isinstance(player["rink_position"], dict):
                             dx = player["rink_position"]["x"] - last_player["rink_position"]["x"]
@@ -282,12 +292,19 @@ def process_clip(
                             # Fallback for tuple format
                             dx = player["rink_position"][0] - last_player["rink_position"][0]
                             dy = player["rink_position"][1] - last_player["rink_position"][1]
-                        speed = math.sqrt(dx * dx + dy * dy) / dt
-                        player["speed"] = speed
                         
-                        # Calculate acceleration
-                        if "speed" in last_player:
-                            player["acceleration"] = (speed - last_player["speed"]) / dt
+                        # Convert to real-world speed
+                        dx_meters = dx / pixels_per_meter_x
+                        dy_meters = dy / pixels_per_meter_y
+                        speed_mps = math.sqrt(dx_meters * dx_meters + dy_meters * dy_meters) / dt
+                        speed_kmh = speed_mps * 3.6  # convert to km/hr
+                        
+                        player["speed"] = speed_kmh  # Store in km/hr
+                        player["speed_mps"] = speed_mps  # Also store in m/s
+                        
+                        # Calculate acceleration (m/s²)
+                        if "speed_mps" in last_player:
+                            player["acceleration"] = (speed_mps - last_player["speed_mps"]) / dt
                         else:
                             player["acceleration"] = 0.0
                     else:

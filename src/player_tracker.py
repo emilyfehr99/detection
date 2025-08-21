@@ -16,6 +16,7 @@ from player_detector import PlayerDetector
 from orientation_detector import OrientationDetector
 from homography_calculator import HomographyCalculator
 from jersey_color_detector import JerseyColorDetector
+from pose_lifter_3d import PoseLifter3D
 from ultralytics import YOLO
 
 
@@ -112,6 +113,9 @@ class PlayerTracker:
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to initialize MediaPipe Pose: {e}")
+        
+        # Initialize 3D pose lifter for enhanced skeleton accuracy
+        self.pose_lifter_3d = PoseLifter3D()
         
     def track_player_across_frames(self, detection: Dict, frame_id: int) -> str:
         """
@@ -383,18 +387,34 @@ class PlayerTracker:
                                 rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                                 result = self.pose_estimator.process(rgb)
                                 if result and getattr(result, "pose_landmarks", None):
-                                    landmarks = []
+                                    # Convert MediaPipe landmarks to our format
+                                    landmarks_2d = []
                                     h, w = crop.shape[:2]
                                     for idx, lm in enumerate(result.pose_landmarks.landmark):
                                         px = x1 + int(lm.x * w)
                                         py = y1 + int(lm.y * h)
-                                        landmarks.append({
-                                            "index": idx,
+                                        landmarks_2d.append({
+                                            "landmark_id": idx,
                                             "x": px,
                                             "y": py,
                                             "visibility": float(lm.visibility)
                                         })
-                                    player_data["pose_landmarks"] = landmarks
+                                    
+                                    # Use 3D pose lifter for enhanced accuracy
+                                    frame_timestamp = frame_id / 60.0  # Approximate timestamp
+                                    landmarks_3d = self.pose_lifter_3d.lift_2d_to_3d(
+                                        landmarks_2d, 
+                                        player_id, 
+                                        frame_timestamp
+                                    )
+                                    
+                                    # Store both 2D and 3D landmarks
+                                    player_data["pose_landmarks"] = landmarks_2d
+                                    player_data["pose_landmarks_3d"] = landmarks_3d
+                                    
+                                    # Add pose quality score
+                                    pose_quality = self.pose_lifter_3d.get_pose_quality_score(landmarks_3d)
+                                    player_data["pose_quality_score"] = pose_quality
                 except Exception as e:
                     self.logger.warning(f"Pose estimation failed for {player_id}: {e}")
                 
