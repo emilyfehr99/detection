@@ -270,7 +270,8 @@ def process_clip(
                 for player in frame_data["players"]:
                     # Find this player in the last frame
                     last_player = next((p for p in last_frame["players"] if p["player_id"] == player["player_id"]), None)
-                    if last_player and "rink_position" in player and "rink_position" in last_player:
+                    if (last_player and "rink_position" in player and "rink_position" in last_player and 
+                        player["rink_position"] is not None and last_player["rink_position"] is not None):
                         # Calculate speed (pixels per second)
                         dt = 1.0 / fps
                         # Handle both tuple and dictionary formats for rink_position
@@ -1008,17 +1009,32 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             document.getElementById('playPause').addEventListener('click', () => {{
                 const button = document.getElementById('playPause');
                 if (isPlaying) {{
-                    clearInterval(playInterval);
+                    isPlaying = false;
                     button.textContent = '▶';
                 }} else {{
-                    playInterval = setInterval(() => {{
-                        const newFrame = (parseInt(frameSlider.value) + 1) % framesData.length;
-                        updateFrame(newFrame);
-                    }}, {int(1000 / video_fps)}); // Real-time playback ({video_fps:.1f} fps)
+                    isPlaying = true;
                     button.textContent = '⏸';
+                    playNextFrame();
                 }}
-                isPlaying = !isPlaying;
             }});
+            
+            // Accurate frame timing using requestAnimationFrame
+            let lastFrameTime = 0;
+            // Use the original video FPS for consistent playback speed
+            const frameInterval = 1000 / {video_fps:.1f}; // Time per frame in ms
+            
+            function playNextFrame() {{
+                if (!isPlaying) return;
+                
+                const currentTime = performance.now();
+                if (currentTime - lastFrameTime >= frameInterval) {{
+                    const newFrame = (parseInt(frameSlider.value) + 1) % framesData.length;
+                    updateFrame(newFrame);
+                    lastFrameTime = currentTime;
+                }}
+                
+                requestAnimationFrame(playNextFrame);
+            }}
             
             frameSlider.addEventListener('input', (e) => {{
                 const frameNum = parseInt(e.target.value);
