@@ -692,6 +692,41 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 margin-bottom: 5px;
                 font-size: 12px;
             }}
+            .zone-entries-container {{
+                background: #f8f9fa;
+                padding: 15px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+                border: 1px solid #dee2e6;
+            }}
+            .zone-entry-stats {{
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 10px;
+            }}
+            .stat-item {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 8px 12px;
+                background: white;
+                border-radius: 6px;
+                border: 1px solid #dee2e6;
+            }}
+            .stat-label {{
+                font-weight: bold;
+                color: #495057;
+                font-size: 14px;
+            }}
+            .zone-info, .zone-definition {{
+                margin-top: 10px;
+                padding: 8px;
+                background: #e9ecef;
+                border-radius: 4px;
+                font-size: 12px;
+                line-height: 1.4;
+            }}
             .team-table-container {{
                 margin-top: 20px;
             }}
@@ -772,39 +807,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                                     </div>
                                 </div>
                             </div>
-                            <div class="confidence-analysis">
-                                <h4>Detection Confidence:</h4>
-                                <div class="confidence-stats">
-                                    <div class="confidence-stat">
-                                        <span class="confidence-label">High Confidence:</span>
-                                        <span id="highConfidenceCount">-</span>
-                                    </div>
-                                    <div class="confidence-stat">
-                                        <span class="confidence-label">Medium Confidence:</span>
-                                        <span id="mediumConfidenceCount">-</span>
-                                    </div>
-                                    <div class="confidence-stat">
-                                        <span class="confidence-label">Low Confidence:</span>
-                                        <span id="lowConfidenceCount">-</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="team-table-container">
-                                <h4>Player Team Assignments:</h4>
-                                            <table class="team-table">
-                <thead>
-                    <tr>
-                        <th>Player ID</th>
-                        <th>Roboflow Class</th>
-                        <th>Team</th>
-                        <th>Confidence</th>
-                        <th>Method</th>
-                    </tr>
-                </thead>
-                <tbody id="teamTableBody">
-                </tbody>
-            </table>
-                            </div>
+                            
                         </div>
                     </div>
                 </div>
@@ -820,12 +823,40 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 </div>
             </div>
             <div class="side-panel">
+                <div class="zone-entries-container">
+                    <h3>Zone Entry Analysis</h3>
+                    <div class="zone-info">
+                        <small class="text-muted">Using actual blue line coordinates (L: 590px, R: 840px)</small>
+                    </div>
+                    <div class="zone-entry-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Zone Entries:</span>
+                            <span id="totalZoneEntries">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Team A Entries:</span>
+                            <span id="teamAZoneEntries">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Team B Entries:</span>
+                            <span id="teamBZoneEntries">0</span>
+                        </div>
+                    </div>
+                    <div class="zone-definition">
+                        <small class="text-muted">
+                            <strong>Defensive Zone:</strong> x < 590 | 
+                            <strong>Neutral Zone:</strong> 590 ≤ x ≤ 840 | 
+                            <strong>Offensive Zone:</strong> x > 840
+                        </small>
+                    </div>
+                </div>
                 <div class="metrics-table-container">
                     <h3>Player Metrics</h3>
                     <table class="metrics-table">
                         <thead>
                             <tr>
                                 <th>Player ID</th>
+                                <th>Speed (km/h)</th>
                                 <th>Acceleration (m/s²)</th>
                                 <th>Orientation (°)</th>
                             </tr>
@@ -906,6 +937,7 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                         return `
                             <tr>
                                 <td>${{player.player_id}}</td>
+                                <td>${{player.speed_ma}} km/h</td>
                                 <td>${{player.acceleration_ma}} m/s²</td>
                                 <td>${{player.orientation_ma}}°</td>
                             </tr>
@@ -913,7 +945,9 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                     }}).join('');
             }}
             
-            function updateTeamDetection(frameNum) {{
+            
+
+            function updateTeamDistribution(frameNum) {{
                 const frameData = framesData[frameNum];
                 if (!frameData || !frameData.players) return;
 
@@ -923,27 +957,21 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 let unknownCount = 0;
                 let homeCount = 0;
                 let awayCount = 0;
-                let highConfidence = 0;
-                let mediumConfidence = 0;
-                let lowConfidence = 0;
 
                 frameData.players
                     .filter(player => player.type && player.type.toLowerCase() === 'player')
                     .forEach(player => {{
                         const team = player.team || 'Unknown';
-                        const confidence = player.team_confidence || 0;
                         
-                        if (team.includes('Team A')) teamACount++;
-                        else if (team.includes('Team B')) teamBCount++;
-                        else unknownCount++;
-                        
-                                                    // Count home/away based on team names
-                            if (team.toLowerCase().includes('team a')) homeCount++;
-                            else if (team.toLowerCase().includes('team b')) awayCount++;
-                        
-                        if (confidence > 0.8) highConfidence++;
-                        else if (confidence > 0.6) mediumConfidence++;
-                        else if (confidence > 0.4) lowConfidence++;
+                        if (team.includes('Team A')) {{
+                            teamACount++;
+                            homeCount++;
+                        }} else if (team.includes('Team B')) {{
+                            teamBCount++;
+                            awayCount++;
+                        }} else {{
+                            unknownCount++;
+                        }}
                     }});
 
                 // Update team distribution
@@ -954,32 +982,92 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 // Update home/away counts
                 document.getElementById('homeCount').textContent = homeCount;
                 document.getElementById('awayCount').textContent = awayCount;
-                
-                // Update confidence analysis
-                document.getElementById('highConfidenceCount').textContent = highConfidence;
-                document.getElementById('mediumConfidenceCount').textContent = mediumConfidence;
-                document.getElementById('lowConfidenceCount').textContent = lowConfidence;
+            }}
 
-                // Update team table
-                const teamTbody = document.getElementById('teamTableBody');
-                teamTbody.innerHTML = frameData.players
-                    .filter(player => player.type && player.type.toLowerCase() === 'player')
-                    .map(player => {{
-                        const team = player.team || 'Unknown';
-                        const confidence = player.team_confidence || 0;
-                        const method = player.team_detection_method || 'unknown';
-                        const roboflowClass = player.roboflow_class || 'unknown';
-                        
-                        return `
-                            <tr>
-                                <td>${{player.player_id}}</td>
-                                <td>${{roboflowClass}}</td>
-                                <td>${{team}}</td>
-                                <td>${{(confidence * 100).toFixed(1)}}%</td>
-                                <td>${{method}}</td>
-                            </tr>
-                        `;
-                    }}).join('');
+            function updateZoneEntries() {{
+                // Professional hockey analyst zone entry detection
+                // Using actual blue line coordinates from rink detection
+                let totalEntries = 0;
+                let teamAEntries = 0;
+                let teamBEntries = 0;
+                
+                // Track players by zone to detect actual zone entries
+                const playerZoneHistory = new Map(); // playerId -> {{currentZone: '', lastZone: '', entryCount: 0, team: ''}}
+                
+                // Define zones using actual rink coordinates
+                const LEFT_BLUE_LINE_X = 590;  // Left blue line
+                const RIGHT_BLUE_LINE_X = 840; // Right blue line
+                const CENTER_LINE_X = 715;     // Center line
+                
+                framesData.forEach((frameData, frameIdx) => {{
+                    if (!frameData.players) return;
+                    
+                    frameData.players.forEach(player => {{
+                        if (player.rink_position && player.type && player.type.toLowerCase() === 'player') {{
+                            const x = player.rink_position.x;
+                            const playerId = player.player_id;
+                            const team = player.team || 'Unknown';
+                            
+                            // Determine current zone
+                            let currentZone;
+                            if (x < LEFT_BLUE_LINE_X) {{
+                                currentZone = 'defensive';
+                            }} else if (x > RIGHT_BLUE_LINE_X) {{
+                                currentZone = 'offensive';
+                            }} else {{
+                                currentZone = 'neutral';
+                            }}
+                            
+                            // Get or initialize player history
+                            if (!playerZoneHistory.has(playerId)) {{
+                                playerZoneHistory.set(playerId, {{
+                                    currentZone: currentZone,
+                                    lastZone: currentZone,
+                                    entryCount: 0,
+                                    team: team
+                                }});
+                                return;
+                            }}
+                            
+                            const history = playerZoneHistory.get(playerId);
+                            const lastZone = history.currentZone;
+                            history.lastZone = lastZone;
+                            history.currentZone = currentZone;
+                            
+                            // Detect zone entry: player moved from neutral to offensive zone
+                            if (lastZone === 'neutral' && currentZone === 'offensive') {{
+                                // This is a proper zone entry - player crossed blue line into offensive zone
+                                history.entryCount++;
+                                totalEntries++;
+                                
+                                if (team.includes('Team A')) {{
+                                    teamAEntries++;
+                                }} else if (team.includes('Team B')) {{
+                                    teamBEntries++;
+                                }}
+                                
+                                console.log(`Zone Entry: Player ${{playerId}} (${{team}}) entered offensive zone at frame ${{frameIdx}}`);
+                            }}
+                            
+                            // Detect zone exit: player moved from offensive to neutral zone
+                            if (lastZone === 'offensive' && currentZone === 'neutral') {{
+                                console.log(`Zone Exit: Player ${{playerId}} (${{team}}) exited offensive zone at frame ${{frameIdx}}`);
+                            }}
+                        }}
+                    }});
+                }});
+                
+                // Update the display
+                document.getElementById('totalZoneEntries').textContent = totalEntries;
+                document.getElementById('teamAZoneEntries').textContent = teamAEntries;
+                document.getElementById('teamBZoneEntries').textContent = teamBEntries;
+                
+                // Debug info
+                console.log(`Zone Entry Analysis Complete:`);
+                console.log(`Total Zone Entries: ${{totalEntries}}`);
+                console.log(`Team A Entries: ${{teamAEntries}}`);
+                console.log(`Team B Entries: ${{teamBEntries}}`);
+                console.log(`Player Zone History:`, playerZoneHistory);
             }}
 
             function updateFrame(frameNum) {{
@@ -987,7 +1075,8 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 frameNumber.textContent = `Frame: ${{frameNum}}`;
                 updateFrameImages(frameNum);
                 updateMetricsTable(frameNum);
-                updateTeamDetection(frameNum);
+                updateTeamDistribution(frameNum);
+                updateZoneEntries();
             }}
             
             // Frame navigation controls

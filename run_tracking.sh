@@ -6,7 +6,7 @@
 # No command line arguments needed - process entire video
 
 # Default values
-VIDEO_PATH="data/videos/PIT_vs_CHI_2016_2.mp4"
+VIDEO_PATH="data/videos/CAN-SWE.mp4"
 SEGMENTATION_MODEL="models/segmentation.pt"
 DETECTION_MODEL="models/detection.pt"
 ORIENTATION_MODEL="models/orient.pth"
