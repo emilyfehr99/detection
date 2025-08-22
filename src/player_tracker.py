@@ -486,13 +486,21 @@ class PlayerTracker:
                 pos = player["reference_point"]
                 x, y = int(pos["pixel_x"]), int(pos["pixel_y"])
                 
-                # Draw player marker (blue dot)
-                cv2.circle(broadcast_vis, (x, y), 4, (255, 0, 0), -1)  # Blue dot
+                # Draw player marker with team-based color
+                team = player.get("team", "Unknown")
+                if "Team A" in team:
+                    color = (0, 0, 255)  # Red for home team (Team A)
+                elif "Team B" in team:
+                    color = (255, 0, 0)  # Blue for away team (Team B)
+                else:
+                    color = (128, 128, 128)  # Gray for unknown team
+                
+                cv2.circle(broadcast_vis, (x, y), 4, color, -1)
                 
                 # Add player ID if available
                 if "player_id" in player:
                     cv2.putText(broadcast_vis, str(player["player_id"]), 
-                              (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                              (x + 10, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Add frame number
         cv2.putText(broadcast_vis, f"Frame: {frame_idx}", (10, 70), 
@@ -512,8 +520,16 @@ class PlayerTracker:
                     
                     # Only draw players within rink boundaries
                     if 0 <= rx < rink_vis.shape[1] and 0 <= ry < rink_vis.shape[0]:
-                        # Draw player marker (blue dot)
-                        cv2.circle(rink_vis, (rx, ry), 4, (255, 0, 0), -1)  # Blue dot
+                        # Draw player marker with team-based color
+                        team = player.get("team", "Unknown")
+                        if "Team A" in team:
+                            color = (0, 0, 255)  # Red for home team (Team A)
+                        elif "Team B" in team:
+                            color = (255, 0, 0)  # Blue for away team (Team B)
+                        else:
+                            color = (128, 128, 128)  # Gray for unknown team
+                        
+                        cv2.circle(rink_vis, (rx, ry), 4, color, -1)
                         
                         # Add player ID and orientation if available
                         label = player.get("player_id", "")
@@ -521,7 +537,7 @@ class PlayerTracker:
                             label += f" ({player['orientation']})"
                         if label:
                             cv2.putText(rink_vis, label, (rx + 10, ry - 10), 
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             
             visualizations["rink"] = rink_vis
         

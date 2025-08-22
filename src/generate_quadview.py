@@ -351,8 +351,15 @@ def create_quadview(
                 x = int(pos["x"] * scale_x)
                 y = int(pos["y"] * scale_y)
                 
-                # Draw player marker (blue dot)
-                cv2.circle(detections_vis, (x, y), 4, (255, 0, 0), -1)
+                # Draw player marker with team-based color
+                team = player.get("team", "Unknown")
+                if "Team A" in team:
+                    color = (0, 0, 255)  # Red for home team (Team A)
+                elif "Team B" in team:
+                    color = (255, 0, 0)  # Blue for away team (Team B)
+                else:
+                    color = (128, 128, 128)  # Gray for unknown team
+                cv2.circle(detections_vis, (x, y), 4, color, -1)
                 
                 # Draw bounding box if available
                 if "bbox" in player:
@@ -372,13 +379,22 @@ def create_quadview(
                 if "orientation" in player:
                     label += f" ({player['orientation']}°)"
                 if label:
+                    # Use team-based color for text
+                    team = player.get("team", "Unknown")
+                    if "Team A" in team:
+                        text_color = (0, 0, 255)  # Red for home team (Team A)
+                    elif "Team B" in team:
+                        text_color = (255, 0, 0)  # Blue for away team (Team B)
+                    else:
+                        text_color = (128, 128, 128)  # Gray for unknown team
+                    
                     cv2.putText(
                         detections_vis,
                         label,
                         (x + 5, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.4,
-                        (255, 0, 0),
+                        text_color,
                         1
                     )
     
@@ -406,23 +422,39 @@ def create_quadview(
                     x = int(pos["x"] * scale_x)
                     y = int(pos["y"] * scale_y)
                     
-                    # Draw player marker (blue dot)
-                    cv2.circle(clean_rink_resized, (x, y), 4, (255, 0, 0), -1)
+                                    # Draw player marker with team-based color
+                team = player.get("team", "Unknown")
+                if "Team A" in team:
+                    color = (0, 0, 255)  # Red for home team (Team A)
+                elif "Team B" in team:
+                    color = (255, 0, 0)  # Blue for away team (Team B)
+                else:
+                    color = (128, 128, 128)  # Gray for unknown team
+                cv2.circle(clean_rink_resized, (x, y), 4, color, -1)
                     
-                    # Add player ID and orientation if available
-                    label = player.get("player_id", "")
-                    if "orientation" in player:
-                        label += f" ({player['orientation']}°)"
-                    if label:
-                        cv2.putText(
-                            clean_rink_resized,
-                            label,
-                            (x + 5, y - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.4,
-                            (255, 0, 0),
-                            1
-                        )
+                                    # Add player ID and orientation if available
+                label = player.get("player_id", "")
+                if "orientation" in player:
+                    label += f" ({player['orientation']}°)"
+                if label:
+                    # Use team-based color for text
+                    team = player.get("team", "Unknown")
+                    if "Team A" in team:
+                        text_color = (0, 0, 255)  # Red for home team (Team A)
+                    elif "Team B" in team:
+                        text_color = (255, 0, 0)  # Blue for away team (Team B)
+                    else:
+                        text_color = (128, 128, 128)  # Gray for unknown team
+                    
+                    cv2.putText(
+                        clean_rink_resized,
+                        label,
+                        (x + 5, y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4,
+                        text_color,
+                        1
+                    )
     
     cv2.putText(
         clean_rink_resized,

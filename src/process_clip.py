@@ -652,14 +652,12 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                 position: absolute;
                 width: 10px;
                 height: 10px;
-                background-color: blue;
                 border-radius: 50%;
                 transform: translate(-50%, -50%);
             }}
             .player-label {{
                 position: absolute;
                 font-size: 12px;
-                color: blue;
                 transform: translate(10px, -10px);
             }}
             
@@ -908,14 +906,31 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                             const rx = player.rink_position.x;
                             const ry = player.rink_position.y;
 
+                            // Determine team-based colors
+                            const team = player.team || 'Unknown';
+                            let markerColor, labelColor;
+                            
+                            if (team.includes('Team A')) {{
+                                markerColor = 'red';      // Red for home team (Team A)
+                                labelColor = 'red';
+                            }} else if (team.includes('Team B')) {{
+                                markerColor = 'blue';     // Blue for away team (Team B)
+                                labelColor = 'blue';
+                            }} else {{
+                                markerColor = 'gray';    // Gray for unknown team
+                                labelColor = 'gray';
+                            }}
+                            
                             const marker = document.createElement('div');
                             marker.className = 'player-marker';
                             marker.style.left = `${{rx}}px`;
                             marker.style.top = `${{ry}}px`;
+                            marker.style.backgroundColor = markerColor;
 
                             const label = document.createElement('div');
                             label.className = 'player-label';
                             label.textContent = `${{player.player_id}}`;
+                            label.style.color = labelColor;
 
                             playerMarkers.appendChild(marker);
                             playerMarkers.appendChild(label);
