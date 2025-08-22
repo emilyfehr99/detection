@@ -640,6 +640,12 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             .control-button:hover {{
                 background: #0056b3;
             }}
+            .playback-info {{
+                margin-top: 8px;
+                text-align: center;
+                color: #666;
+                font-size: 12px;
+            }}
             #tracking {{
                 position: relative;
                 width: 1400px;
@@ -815,9 +821,13 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
                         <button class="control-button" id="prevFrame">◀</button>
                         <button class="control-button" id="playPause">▶</button>
                         <button class="control-button" id="nextFrame">▶</button>
+                        <button class="control-button" id="resetVideo" onclick="resetVideo()">⏹</button>
                     </div>
                     <input type="range" id="frameSlider" min="0" max="{len(frames_info)-1}" value="0">
                     <span id="frameNumber">Frame: 0</span>
+                    <div class="playback-info">
+                        <small>Space: Play/Pause | ←→: Frame | Home: Reset</small>
+                    </div>
                 </div>
             </div>
             <div class="side-panel">
@@ -1098,38 +1108,69 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             document.getElementById('prevFrame').addEventListener('click', () => {{
                 const newFrame = Math.max(0, parseInt(frameSlider.value) - 1);
                 updateFrame(newFrame);
+                // Reset playback timing when manually navigating
+                if (isPlaying) {{
+                    startTime = performance.now() - (newFrame * frameInterval);
+                    currentFrameIndex = newFrame;
+                }}
             }});
 
             document.getElementById('nextFrame').addEventListener('click', () => {{
                 const newFrame = Math.min(framesData.length - 1, parseInt(frameSlider.value) + 1);
                 updateFrame(newFrame);
+                // Reset playback timing when manually navigating
+                if (isPlaying) {{
+                    startTime = performance.now() - (newFrame * frameInterval);
+                    currentFrameIndex = newFrame;
+                }}
             }});
 
             document.getElementById('playPause').addEventListener('click', () => {{
                 const button = document.getElementById('playPause');
                 if (isPlaying) {{
+                    // Pause playback
                     isPlaying = false;
                     button.textContent = '▶';
                 }} else {{
+                    // Start playback from current frame
                     isPlaying = true;
                     button.textContent = '⏸';
+                    startTime = performance.now() - (parseInt(frameSlider.value) * frameInterval);
+                    currentFrameIndex = parseInt(frameSlider.value);
                     playNextFrame();
                 }}
             }});
             
-            // Accurate frame timing using requestAnimationFrame
+            // Real-time video playback using accurate timing
             let lastFrameTime = 0;
-            // Use the original video FPS for consistent playback speed
+            let startTime = 0;
+            let currentFrameIndex = 0;
+            // Use the original video FPS for real-time playback speed
             const frameInterval = 1000 / {video_fps:.1f}; // Time per frame in ms
             
             function playNextFrame() {{
                 if (!isPlaying) return;
                 
                 const currentTime = performance.now();
-                if (currentTime - lastFrameTime >= frameInterval) {{
-                    const newFrame = (parseInt(frameSlider.value) + 1) % framesData.length;
+                
+                // Calculate how many frames should have passed since start
+                const elapsedTime = currentTime - startTime;
+                const expectedFrame = Math.floor(elapsedTime / frameInterval);
+                
+                if (expectedFrame > currentFrameIndex) {{
+                    // Advance to the next frame(s) if enough time has passed
+                    currentFrameIndex = expectedFrame;
+                    const newFrame = currentFrameIndex % framesData.length;
                     updateFrame(newFrame);
-                    lastFrameTime = currentTime;
+                    
+                    // If we've reached the end, stop playing
+                    if (newFrame === framesData.length - 1) {{
+                        isPlaying = false;
+                        document.getElementById('playPause').textContent = '▶';
+                        currentFrameIndex = 0;
+                        startTime = 0;
+                        return;
+                    }}
                 }}
                 
                 requestAnimationFrame(playNextFrame);
@@ -1138,6 +1179,42 @@ def create_html_visualization(frames_info: List[Dict], output_dir: str, rink_ima
             frameSlider.addEventListener('input', (e) => {{
                 const frameNum = parseInt(e.target.value);
                 updateFrame(frameNum);
+                // Reset playback timing when manually scrubbing
+                if (isPlaying) {{
+                    startTime = performance.now() - (frameNum * frameInterval);
+                    currentFrameIndex = frameNum;
+                }}
+            }});
+            
+            // Add reset functionality
+            function resetVideo() {{
+                isPlaying = false;
+                document.getElementById('playPause').textContent = '▶';
+                currentFrameIndex = 0;
+                startTime = 0;
+                updateFrame(0);
+            }}
+            
+            // Add keyboard shortcuts for better control
+            document.addEventListener('keydown', (e) => {{
+                switch(e.key) {{
+                    case ' ':
+                        e.preventDefault();
+                        document.getElementById('playPause').click();
+                        break;
+                    case 'ArrowLeft':
+                        e.preventDefault();
+                        document.getElementById('prevFrame').click();
+                        break;
+                    case 'ArrowRight':
+                        e.preventDefault();
+                        document.getElementById('nextFrame').click();
+                        break;
+                    case 'Home':
+                        e.preventDefault();
+                        resetVideo();
+                        break;
+                }}
             }});
             
             // Initialize with first frame
